@@ -46,13 +46,16 @@ jobs:
             https://cdn.kernel.org/pub/linux/kernel/v4.x/linux-4.14.tar.xz
           tar -xf linux-4.14.tar.xz
           mv linux-4.14 linux
-          # Donor = working FY 3.10 tree (contains exynos3475 clock/pinctrl/uart)
-          git clone --depth 1 --branch cm-14.1 \
+          # Donor = working FY 3.10 tree (contains exynos3475 board/driver code).
+          # NOTE: exynos clock/pinmux code lives under arch/arm/mach-exynos and
+          # drivers/pinctrl, not drivers/clocks/arch_exynos4.
+          git clone --quiet --depth 1 --branch cm-14.1 \
             https://github.com/Exynos3475/android_kernel_samsung_exynos3475.git donor
           du -sh donor
-          test -f donor/drivers/clocks/arch_exynos.c
-          test -f donor/drivers/clocks/arch_exynos4/
-          test -f donor/drivers/clocks/arch_exynos4/clock-exynos4.c
+          test -f donor/arch/arm/mach-exynos/include/mach/regs-clock-exynos3475.h
+          test -f donor/include/dt-bindings/clock/exynos3475.h
+          test -f donor/drivers/pinctrl/pinctrl-exynos.c
+          test -f donor/drivers/clocksource/exynos_mct.c
           echo "DONOR TREE READY"
 
       - name: Port Exynos3475 board and early drivers from donor
