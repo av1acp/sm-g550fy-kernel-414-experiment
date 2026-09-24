@@ -154,7 +154,11 @@ jobs:
             sed -i '0,/^YYLTYPE yylloc$/s//extern YYLTYPE yylloc/' \
               scripts/dtc/dtc-parser.tab.c_shipped
           fi
-          make exynos4_defconfig
+          # Linux 4.14 has no exynos4_defconfig; the Exynos4 family is
+          # covered by exynos_defconfig (CONFIG_ARCH_EXYNOS4 selects it).
+          make exynos_defconfig
+          scripts/config --enable CONFIG_ARCH_EXYNOS4 || true
+          scripts/config --enable CONFIG_ARCH_EXYNOS || true
           # enable the pieces that exist in 4.14 upstream
           scripts/config --enable CONFIG_PINCTRL_EXYNOS || true
           scripts/config --enable CONFIG_CLOCK_EXYNOS4 || true
