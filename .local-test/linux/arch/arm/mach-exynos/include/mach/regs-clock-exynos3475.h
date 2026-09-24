@@ -13,15 +13,14 @@
 #define __REGS_CLOCK_EXYNOS3475_H__ __FILE__
 
 /*
- * Linux 4.14 compatibility address macros for the Exynos3475 CMU.
+ * Linux 4.14 Exynos3475 CMU virtual map.
  *
- * The donor driver used a vendor virtual-address map.  The 4.14 tree does
- * not provide that map, so the Phase 7 compile gate uses a single reserved
- * CMU virtual window.  The physical layout and all register offsets remain
- * those from the donor; hardware mapping/early-machine integration is a
- * separate bring-up gate.
+ * The donor tree places the CMU window at S3C_ADDR(0x02100000). The Linux
+ * 4.14 Samsung base is 0xF6000000, so the resulting virtual window is
+ * 0xF8100000. Individual blocks follow the donor offsets; this map is the
+ * first real machine-map gate, not a hardware alias.
  */
-#define EXYNOS3475_VA_CMU_BASE		0xF6100000UL
+#define EXYNOS3475_VA_CMU_BASE		0xF8100000UL
 #define EXYNOS3475_VA_CMU_TOP		(EXYNOS3475_VA_CMU_BASE + 0x0000)
 #define EXYNOS3475_VA_CMU_MIF		(EXYNOS3475_VA_CMU_BASE + 0x1000)
 #define EXYNOS3475_VA_CMU_CPU		(EXYNOS3475_VA_CMU_BASE + 0x3000)

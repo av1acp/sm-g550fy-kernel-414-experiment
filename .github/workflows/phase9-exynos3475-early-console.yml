@@ -1,0 +1,191 @@
+name: Phase9 - Exynos3475 real CMU map + serial2/MCT early-console compile gate
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: phase9-exynos3475-early-console
+  cancel-in-progress: true
+
+jobs:
+  phase9:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Checkout experiment repository
+        uses: actions/checkout@v7.0.1
+
+      - name: Install build packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            bc bison flex build-essential ca-certificates ccache git \
+            libncurses-dev libssl-dev xz-utils device-tree-compiler
+
+      - name: Restore cached ARM32 toolchain
+        id: toolchain-cache
+        uses: actions/cache@v6.1.0
+        with:
+          path: .toolchain/arm-eabi-4.9
+          key: burstlam-arm-eabi-4.9-v1
+
+      - name: Fetch era-matched ARM32 toolchain
+        if: ${{ steps.toolchain-cache.outputs.cache-hit != 'true' }}
+        run: |
+          set -euo pipefail
+          TC="$GITHUB_WORKSPACE/.toolchain/arm-eabi-4.9"
+          mkdir -p "$(dirname "$TC")"
+          rm -rf "$TC"
+          git clone --quiet --depth 1 https://github.com/burstlam/arm-eabi-4.9.git "$TC"
+          "$TC/bin/arm-eabi-gcc" --version | head -1
+
+      - name: Fetch fresh Linux 4.14 and verify FY defconfig source
+        run: |
+          set -euo pipefail
+          mkdir -p source
+          cd source
+          curl -fSL --retry 3 -o linux-4.14.tar.xz \
+            https://cdn.kernel.org/pub/linux/kernel/v4.x/linux-4.14.tar.xz
+          tar -xf linux-4.14.tar.xz
+          mv linux-4.14 linux
+          test -f linux/arch/arm/configs/exynos_defconfig
+          git clone --quiet --depth 1 --branch cm-14.1 \
+            https://github.com/Exynos3475/android_kernel_samsung_exynos3475.git donor
+          test -f donor/arch/arm/configs/o5lteswa_00_defconfig
+          {
+            echo "=== FY donor defconfig proof ==="
+            sha256sum donor/arch/arm/configs/o5lteswa_00_defconfig
+            grep -E 'CONFIG_(SOC_EXYNOS3475|MACH_UNIVERSAL3475|S3C_LOWLEVEL_UART_PORT|SERIAL_SAMSUNG|BUILD_ARM_APPENDED_DTB_IMAGE|ARCH_EXYNOS[345])=' \
+              donor/arch/arm/configs/o5lteswa_00_defconfig || true
+          } | tee "$GITHUB_WORKSPACE/phase9-donor-defconfig.txt"
+
+      - name: Apply Phase 9 board source overlay
+        run: |
+          set -euo pipefail
+          SRC="$GITHUB_WORKSPACE/source/linux"
+          PORT="$GITHUB_WORKSPACE/.local-test/linux"
+          for f in \
+            arch/arm/mach-exynos/exynos.c \
+            arch/arm/mach-exynos/include/mach/map.h \
+            arch/arm/mach-exynos/include/mach/regs-clock-exynos3475.h \
+            arch/arm/mach-exynos/Kconfig \
+            drivers/clk/samsung/Makefile \
+            drivers/clk/samsung/clk-exynos3475.c \
+            drivers/clk/samsung/composite-exynos3475.c \
+            drivers/clk/samsung/composite-exynos3475.h \
+            drivers/pinctrl/samsung/Makefile \
+            drivers/pinctrl/samsung/pinctrl-samsung.c \
+            drivers/pinctrl/samsung/pinctrl-samsung.h \
+            drivers/pinctrl/samsung/pinctrl-exynos3475.c \
+            arch/arm/boot/dts/Makefile \
+            arch/arm/boot/dts/exynos3475-pinctrl.dtsi \
+            arch/arm/boot/dts/exynos3475-universal3475.dts \
+            include/dt-bindings/clock/exynos3475.h \
+            scripts/dtc/dtc-parser.tab.c_shipped; do
+            test -f "$PORT/$f"
+            mkdir -p "$SRC/$(dirname "$f")"
+            cp "$PORT/$f" "$SRC/$f"
+          done
+          grep -q '0xF8100000UL' "$SRC/arch/arm/mach-exynos/include/mach/regs-clock-exynos3475.h"
+          grep -q 'console=ttySAC2,115200' "$SRC/arch/arm/boot/dts/exynos3475-universal3475.dts"
+          grep -q 'mct@100b0000' "$SRC/arch/arm/boot/dts/exynos3475-universal3475.dts"
+          {
+            echo "=== Phase 9 overlay hashes ==="
+            sha256sum \
+              "$SRC/arch/arm/mach-exynos/exynos.c" \
+              "$SRC/arch/arm/mach-exynos/include/mach/regs-clock-exynos3475.h" \
+              "$SRC/drivers/clk/samsung/clk-exynos3475.c" \
+              "$SRC/drivers/pinctrl/samsung/pinctrl-exynos3475.c" \
+              "$SRC/arch/arm/boot/dts/exynos3475-universal3475.dts"
+          } | tee "$GITHUB_WORKSPACE/phase9-overlay.txt"
+
+      - name: Configure Exynos3475 early-console gate
+        working-directory: source/linux
+        run: |
+          set -euo pipefail
+          export ARCH=arm
+          export CROSS_COMPILE="$GITHUB_WORKSPACE/.toolchain/arm-eabi-4.9/bin/arm-eabi-"
+          export KBUILD_BUILD_USER=phase9
+          export KBUILD_BUILD_HOST=runner
+          # Phase 7/8 local trees may carry a stale generated config.
+          # Remove it before applying the FY early-console options.
+          rm -f .config include/config/auto.conf include/config/kernel.release
+          make exynos_defconfig
+          scripts/config --enable CONFIG_SOC_EXYNOS3475
+          scripts/config --enable CONFIG_PINCTRL_EXYNOS
+          scripts/config --enable CONFIG_PINCTRL_EXYNOS_ARM
+          scripts/config --enable CONFIG_SERIAL_SAMSUNG
+          scripts/config --enable CONFIG_SERIAL_SAMSUNG_CONSOLE
+          scripts/config --enable CONFIG_CLKSRC_EXYNOS_MCT
+          make olddefconfig
+          grep -E '^CONFIG_(SOC_EXYNOS3475|ARCH_EXYNOS3|ARCH_EXYNOS|COMMON_CLK_SAMSUNG|PINCTRL_EXYNOS_ARM|SERIAL_SAMSUNG|SERIAL_SAMSUNG_CONSOLE|CLKSRC_EXYNOS_MCT)=' .config | tee "$GITHUB_WORKSPACE/phase9-config.txt"
+          test "$(grep -c '^CONFIG_SOC_EXYNOS3475=y$' .config)" -eq 1
+          test "$(grep -c '^CONFIG_PINCTRL_EXYNOS_ARM=y$' .config)" -eq 1
+          test "$(grep -c '^CONFIG_SERIAL_SAMSUNG=y$' .config)" -eq 1
+          test "$(grep -c '^CONFIG_CLKSRC_EXYNOS_MCT=y$' .config)" -eq 1
+
+      - name: Compile Exynos3475 clock, pinctrl, MCT, and board DT
+        working-directory: source/linux
+        run: |
+          set -euo pipefail
+          export ARCH=arm
+          export CROSS_COMPILE="$GITHUB_WORKSPACE/.toolchain/arm-eabi-4.9/bin/arm-eabi-"
+          export KBUILD_BUILD_USER=phase9
+          export KBUILD_BUILD_HOST=runner
+          make -j"$(nproc)" arch/arm/mach-exynos/exynos.o
+          make -j"$(nproc)" drivers/clk/samsung/clk-exynos3475.o
+          make -j"$(nproc)" drivers/clk/samsung/composite-exynos3475.o
+          make -j"$(nproc)" drivers/pinctrl/samsung/pinctrl-exynos3475.o
+          make -j"$(nproc)" drivers/clocksource/exynos_mct.o
+          make -j"$(nproc)" dtbs
+          test -s drivers/clk/samsung/clk-exynos3475.o
+          test -s drivers/clk/samsung/composite-exynos3475.o
+          test -s drivers/pinctrl/samsung/pinctrl-exynos3475.o
+          test -s drivers/clocksource/exynos_mct.o
+          test -s arch/arm/boot/dts/exynos3475-universal3475.dtb
+          dtc -I dtb -O dts arch/arm/boot/dts/exynos3475-universal3475.dtb \
+            > "$GITHUB_WORKSPACE/phase9-expanded.dts"
+          grep -q 'samsung,exynos3475-clock' "$GITHUB_WORKSPACE/phase9-expanded.dts"
+          grep -q 'samsung,exynos4210-mct' "$GITHUB_WORKSPACE/phase9-expanded.dts"
+          grep -q 'uart@13820000' "$GITHUB_WORKSPACE/phase9-expanded.dts"
+          grep -q 'ttySAC2' "$GITHUB_WORKSPACE/phase9-expanded.dts"
+          grep -q 'samsung,exynos3475-pinctrl' "$GITHUB_WORKSPACE/phase9-expanded.dts"
+          echo PHASE9_REAL_CMU_SERIAL2_MCT_COMPILE_PASS
+
+      - name: Full Linux 4.14 image compile (same Phase 9 overlay)
+        working-directory: source/linux
+        run: |
+          set -euo pipefail
+          export ARCH=arm
+          export CROSS_COMPILE="$GITHUB_WORKSPACE/.toolchain/arm-eabi-4.9/bin/arm-eabi-"
+          export KBUILD_BUILD_USER=phase9
+          export KBUILD_BUILD_HOST=runner
+          make -j"$(nproc)" KCFLAGS='-march=armv7-a -marm' zImage dtbs
+          test -s arch/arm/boot/zImage
+          file arch/arm/boot/zImage
+          cat include/config/kernel.release
+          echo PHASE9_FULL_ZIMAGE_COMPILE_PASS
+
+      - name: Upload Phase 9 evidence
+        if: always()
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: phase9-exynos3475-early-console-evidence
+          path: |
+            ${{ github.workspace }}/phase9-donor-defconfig.txt
+            ${{ github.workspace }}/phase9-overlay.txt
+            ${{ github.workspace }}/phase9-config.txt
+            ${{ github.workspace }}/phase9-expanded.dts
+            source/linux/arch/arm/boot/dts/exynos3475-universal3475.dtb
+            source/linux/arch/arm/mach-exynos/exynos.o
+            source/linux/drivers/clk/samsung/clk-exynos3475.o
+            source/linux/drivers/clk/samsung/composite-exynos3475.o
+            source/linux/drivers/pinctrl/samsung/pinctrl-exynos3475.o
+            source/linux/drivers/clocksource/exynos_mct.o
+            source/linux/arch/arm/boot/zImage
+            source/linux/arch/arm/boot/dts/exynos3475-universal3475.dtb
+          if-no-files-found: warn
+          retention-days: 14

@@ -1,10 +1,9 @@
 /*
- * Minimal Linux 4.14 Exynos3475/universal3475 board description.
+ * Linux 4.14 Exynos3475/universal3475 early-console board description.
  *
- * This is a Phase 8 compile-and-bring-up skeleton, not a replacement for
- * the donor board DTS. It exposes the real SoC clock provider, the real
- * Exynos3475 CMU pin banks, and UART0 for an early-console experiment.
- * Unsupported peripherals are intentionally omitted.
+ * Phase 9 enables the real early-boot path: Exynos3475 CMU, MCT
+ * clocksource, CMU pin banks and UART2. Memory, sysram/PMU, eMMC and
+ * vendor peripherals remain separate hardware gates.
  */
 
 /dts-v1/;
@@ -29,20 +28,22 @@
 		pinctrl5 = &pinctrl_5;
 		pinctrl6 = &pinctrl_6;
 		pinctrl7 = &pinctrl_7;
-		uart0 = &serial_0;
+		serial0 = &serial_0;
+		serial1 = &serial_1;
+		serial2 = &serial_2;
 	};
 
 	chosen {
-		bootargs = "console=ttySAC0,115200 earlycon";
-		stdout-path = &serial_0;
+		bootargs = "console=ttySAC2,115200 earlycon androidboot.hardware=universal3475";
+		stdout-path = &serial_2;
 	};
 
 	fixed-rate-clocks {
-		oscclk: clock-26mhz {
-			compatible = "fixed-clock";
+		oscclk: exynos3475-oscclk {
+			compatible = "samsung,exynos3475-oscclk";
 			#clock-cells = <0>;
 			clock-frequency = <26000000>;
-			clock-output-names = "xxti";
+			clock-output-names = "fin_pll";
 		};
 	};
 
@@ -55,14 +56,23 @@
 			compatible = "arm,cortex-a7";
 			reg = <0>;
 			clock-frequency = <1000000000>;
-			clocks = <&clock 22>;
-			clock-names = "cpu";
 		};
-
 		cpu1: cpu@1 {
 			device_type = "cpu";
 			compatible = "arm,cortex-a7";
 			reg = <1>;
+			clock-frequency = <1000000000>;
+		};
+		cpu2: cpu@2 {
+			device_type = "cpu";
+			compatible = "arm,cortex-a7";
+			reg = <2>;
+			clock-frequency = <1000000000>;
+		};
+		cpu3: cpu@3 {
+			device_type = "cpu";
+			compatible = "arm,cortex-a7";
+			reg = <3>;
 			clock-frequency = <1000000000>;
 		};
 	};
@@ -89,14 +99,67 @@
 		#clock-cells = <1>;
 	};
 
+	mct: mct@100b0000 {
+		compatible = "samsung,exynos4210-mct";
+		reg = <0x100b0000 0x800>;
+		interrupt-controller;
+		#interrupt-cells = <1>;
+		interrupt-parent = <&mct_map>;
+		interrupts = <0>, <1>, <2>, <3>,
+			     <4>, <5>, <6>, <7>,
+			     <8>, <9>, <10>, <11>;
+		clocks = <&clock 437>, <&clock 318>;
+		clock-names = "fin_pll", "mct";
+
+		mct_map: mct-map {
+			#interrupt-cells = <1>;
+			#address-cells = <0>;
+			#size-cells = <0>;
+			interrupt-map = <0 &gic 0 102 0>,
+					<1 &gic 0 103 0>,
+					<2 &gic 0 104 0>,
+					<3 &gic 0 105 0>,
+					<4 &gic 0 106 0>,
+					<5 &gic 0 107 0>,
+					<6 &gic 0 108 0>,
+					<7 &gic 0 109 0>,
+					<8 &gic 0 110 0>,
+					<9 &gic 0 111 0>,
+					<10 &gic 0 112 0>,
+					<11 &gic 0 113 0>;
+		};
+	};
+
 	serial_0: uart@13800000 {
 		compatible = "samsung,exynos4210-uart";
 		reg = <0x13800000 0x100>;
 		interrupts = <0 421 0>;
-		clocks = <&clock 357>, <&clock 361>;
+		clocks = <&clock 357>, <&clock 410>;
 		clock-names = "uart", "clk_uart_baud0";
 		pinctrl-names = "default";
 		pinctrl-0 = <&uart0_bus>;
+		status = "disabled";
+	};
+
+	serial_1: uart@13810000 {
+		compatible = "samsung,exynos4210-uart";
+		reg = <0x13810000 0x100>;
+		interrupts = <0 422 0>;
+		clocks = <&clock 356>, <&clock 411>;
+		clock-names = "uart", "clk_uart_baud0";
+		pinctrl-names = "default";
+		pinctrl-0 = <&uart1_bus>;
+		status = "disabled";
+	};
+
+	serial_2: uart@13820000 {
+		compatible = "samsung,exynos4210-uart";
+		reg = <0x13820000 0x100>;
+		interrupts = <0 423 0>;
+		clocks = <&clock 355>, <&clock 412>;
+		clock-names = "uart", "clk_uart_baud0";
+		pinctrl-names = "default";
+		pinctrl-0 = <&uart2_bus>;
 		status = "okay";
 	};
 };
