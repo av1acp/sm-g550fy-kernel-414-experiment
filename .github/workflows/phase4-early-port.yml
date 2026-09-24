@@ -63,35 +63,26 @@ jobs:
                  drivers/clocksource/exynos_mct.c | head -40 || true
           # no mechanical copy: upstream already carries Exynos MCT support.
 
-      - name: Port pinctrl-exynos.c from donor into 4.14
+      - name: Verify 4.14 Samsung pinctrl framework and locate Exynos3475 DT data
         run: |
           set -uo pipefail
           cd source/linux
           DONOR=../donor
-          # 4.14 has no drivers/pinctrl/pinctrl-exynos.c: copy donor file
-          # and record the 4.14 API gaps for the next step.
-          # donor has drivers/pinctrl/pinctrl-exynos.{c,h} (verified via
-          # GitHub tree API), but this shallow clone's sparse checkout may
-          # omit them. Verify explicitly; never fail the step on a missing
-          # optional file, the compile/report step handles gaps.
-          if [ -f "$DONOR/drivers/pinctrl/pinctrl-exynos.c" ]; then
-            cp "$DONOR/drivers/pinctrl/pinctrl-exynos.c" drivers/pinctrl/pinctrl-exynos.c
-            cp "$DONOR/drivers/pinctrl/pinctrl-exynos.h" drivers/pinctrl/pinctrl-exynos.h
-            echo "COPIED donor pinctrl-exynos into 4.14 tree"
-          else
-            echo "NOTE: donor pinctrl-exynos.c absent in this checkout"
-            find "$DONOR" -name 'pinctrl-exynos*' -print | head -10 || true
-          fi
-          if [ -f drivers/pinctrl/pinctrl-exynos.c ]; then
-            echo "=== 4.14 pinctrl core includes donor needs ==="
-            grep -n '#include' drivers/pinctrl/pinctrl-exynos.c | head -20
-            echo "=== likely API breaks (pinctrl_ops -> pinctrl_ops struct changes) ==="
-            grep -n -E 'pinctrl_ops|pinmux_ops|pinctrl_desc|->set_groups|->pinmux_ops' \
-              drivers/pinctrl/pinctrl-exynos.c | head -20
-            echo "pinctrl donor copied (compile will show exact API gaps)"
-          else
-            echo "pinctrl donor file not copied; using 4.14 upstream support"
-          fi
+          echo "=== 4.14 samsung pinctrl files (ALREADY present, do not copy donor over these) ==="
+          ls -la drivers/pinctrl/samsung/pinctrl-exynos*.c 2>/dev/null || true
+          echo
+          echo "=== 4.14 Kconfig symbols ==="
+          grep -n -E 'PINCTRL.*EXYNOS|EXYNOS.*PINCTRL' drivers/pinctrl/samsung/Kconfig || true
+          echo
+          echo "=== donor Exynos3475 DT sources (needed to extend 4.14 DT tables) ==="
+          for f in exynos3475-pinctrl.dtsi exynos3475-universal3475-pinctrl.dtsi \
+                   exynos3475.dtsi exynos3475-universal3475.dts; do
+            [ -f "$DONOR/arch/arm/boot/dts/$f" ] && echo "  donor DTS: $f" || true
+          done
+          find "$DONOR/arch/arm/boot/dts" -maxdepth 1 -iname '*3475*' | head -20
+          echo
+          echo "=== clock data available in 4.14 upstream? ==="
+          grep -n 'exynos3475' drivers/clk/samsung/clk-exynos4*.c 2>/dev/null | head -5 || echo "  no exynos3475 clock table in 4.14 upstream (must add)"
 
       - name: Compile with pinctrl+mct and report exact errors
         working-directory: source/linux
@@ -107,7 +98,11 @@ jobs:
               scripts/dtc/dtc-parser.tab.c_shipped
           fi
           make exynos_defconfig
+          # Exynos pinctrl lives in drivers/pinctrl/samsung (4.14 framework)
           scripts/config --enable CONFIG_PINCTRL_EXYNOS || true
+          scripts/config --enable CONFIG_PINCTRL_S3C24XX || true
+          scripts/config --enable CONFIG_PINCTRL_S3C64XX || true
+          scripts/config --enable CONFIG_PINCTRL_SAMSUNG || true
           scripts/config --enable CONFIG_CLOCK_EXYNOS4 || true
           scripts/config --enable CONFIG_SERIAL_8250_DW || true
           scripts/config --enable CONFIG_MMC_DW || true
@@ -117,8 +112,8 @@ jobs:
           RC=$?
           set -e
           echo "MAKE_RC=$RC"
-          echo "=== pinctrl-exynos compile lines ==="
-          grep -E 'pinctrl-exynos|exynos_mct' "$GITHUB_WORKSPACE/phase4-build.log" | head -30 || true
+          echo "=== exynos pinctrl/mct compile lines ==="
+          grep -E 'pinctrl.*exynos|exynos_mct' "$GITHUB_WORKSPACE/phase4-build.log" | head -30 || true
           echo "=== all errors (first 30) ==="
           grep 'error:' "$GITHUB_WORKSPACE/phase4-build.log" | head -30 || true
           if [ "$RC" -eq 0 ] && [ -s arch/arm/boot/zImage ]; then
