@@ -9,17 +9,18 @@ permissions:
 jobs:
   phase1:
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 40
     steps:
       - name: Checkout experiment repository
         uses: actions/checkout@v7.0.1
 
-      - name: Install QEMU ARM emulation
+      - name: Install build + QEMU packages
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            qemu-system-arm qemu-utils cpio \
-            gzip xz-utils ca-certificates gcc-arm-linux-gnueabi
+            bc bison flex build-essential ca-certificates ccache cpio git \
+            libncurses-dev libssl-dev xz-utils qemu-system-arm qemu-utils \
+            gcc-arm-linux-gnueabi binutils-arm-linux-gnueabi
 
       - name: Restore cached ARM32 toolchain
         id: toolchain-cache
@@ -47,8 +48,9 @@ jobs:
             https://cdn.kernel.org/pub/linux/kernel/v4.x/linux-4.14.tar.xz
           tar -xf linux-4.14.tar.xz
           mv linux-4.14 linux
+          head -5 linux/Makefile
 
-      - name: Build Phase1 QEMU virt kernel
+      - name: Build Linux 4.14 for QEMU vexpress-a9
         working-directory: source/linux
         run: |
           set -euo pipefail
@@ -61,37 +63,26 @@ jobs:
             sed -i '0,/^YYLTYPE yylloc$/s//extern YYLTYPE yylloc/' \
               scripts/dtc/dtc-parser.tab.c_shipped
           fi
-          make defconfig
-          # virt board + serial console + initramfs (busybox from initramfs)
-          scripts/config --enable CONFIG_ARCH_VIRT
-          scripts/config --enable CONFIG_ARM_LPAE
-          scripts/config --enable CONFIG_SERIAL_AMBA_PL011
-          scripts/config --enable CONFIG_SERIAL_AMBA_PL011_CONSOLE
-          scripts/config --enable CONFIG_BLK_DEV_INITRD
-          scripts/config --enable CONFIG_INITRAMFS_SOURCE="\"\""
-          scripts/config --disable CONFIG_PREEMPT_NONE
-          scripts/config --enable CONFIG_PREEMPT_VOLUNTARY
+          make vexpress_defconfig
           make olddefconfig
-          make -j"$(nproc)" zImage
+          make -j"$(nproc)" zImage dtbs
           test -s arch/arm/boot/zImage
           file arch/arm/boot/zImage
           cat include/config/kernel.release
-          echo "VIRT KERNEL BUILD OK"
+          test -s arch/arm/boot/dts/vexpress-v2p-ca9.dtb
+          ls -lh arch/arm/boot/zImage arch/arm/boot/dts/vexpress-v2p-ca9.dtb
 
-      - name: Build static ARM busybox and initramfs
+      - name: Build static ARM busybox
         run: |
           set -euo pipefail
-
-          # busybox.net does not host prebuilt armv7l. Build it from
-          # source with Ubuntu's complete ARM sysroot. The kernel itself
-          # still uses the cached era-matched toolchain above; busybox is
-          # userspace and is not subject to the 4.14 kernel ISA issue.
+          # busybox.net hosts no prebuilt armv7l; build it from source with
+          # Ubuntu's complete ARM sysroot. The KERNEL uses the era-matched
+          # toolchain above; busybox is userspace and is independent.
           curl -fSL --retry 3 -o busybox.tar.bz2 \
             https://busybox.net/downloads/busybox-1.36.1.tar.bz2
           tar -xjf busybox.tar.bz2
           cd busybox-1.36.1
           make defconfig
-          # Busybox has its own .config; kernel scripts/config is not used here.
           sed -i 's/^# CONFIG_STATIC is not set/CONFIG_STATIC=y/' .config
           sed -i 's/^# CONFIG_FEATURE_PREFER_APPLETS is not set/CONFIG_FEATURE_PREFER_APPLETS=y/' .config
           sed -i 's/^# CONFIG_INSTALL_NO_USR is not set/CONFIG_INSTALL_NO_USR=y/' .config
@@ -101,49 +92,58 @@ jobs:
           file busybox
           arm-linux-gnueabi-readelf -h busybox | grep -E 'Class|Machine'
           if arm-linux-gnueabi-readelf -l busybox | grep -q INTERP; then
-            echo "FATAL: busybox is dynamically linked"; exit 1
+            echo "FATAL: busybox dynamically linked"; exit 1
           fi
           echo "STATIC ARM BUSYBOX OK"
 
+      - name: Build minimal initramfs
+        run: |
+          set -euo pipefail
           ROOT="$RUNNER_TEMP/initramfs"
           mkdir -p "$ROOT/bin" "$ROOT/dev" "$ROOT/proc" "$ROOT/sys" "$ROOT/tmp"
-          cp busybox "$ROOT/bin/busybox"
+          cp busybox-1.36.1/busybox "$ROOT/bin/busybox"
           chmod +x "$ROOT/bin/busybox"
+          # /init must be a real executable: use busybox itself as init
+          # (kernel also accepts a shell script with shebang, but a
+          # statically linked binary is the most reliable form).
           cat > "$ROOT/init" <<'EOF'
           #!/bin/sh
           /bin/busybox --install -s /bin
           mount -t proc proc /proc
           mount -t sysfs sys /sys
-          mount -t devtmpfs dev /dev
+          mount -t devtmpfs dev /dev 2>/dev/null || true
           echo "===PHASE1_BOOT_PROOF_START==="
           /bin/busybox uname -a
           echo "PHASE1: userspace reached, PID $$"
           /bin/busybox id
           echo "===PHASE1_BOOT_PROOF_END==="
-          /bin/busybox sleep 1
-          /bin/busybox poweroff -f
+          /bin/busybox poweroff -f 2>/dev/null || /bin/busybox reboot -f
           EOF
           chmod +x "$ROOT/init"
+          # /dev/console is required for the kernel to attach stdin/stdout
+          # to the serial console. cpio is newc; device nodes are created
+          # in the guest by devtmpfs once /init runs.
           (cd "$ROOT" && find . -print0 | cpio --null -o -H newc --quiet) \
             | gzip -1 > "$RUNNER_TEMP/initramfs.cpio.gz"
           ls -lh "$RUNNER_TEMP/initramfs.cpio.gz"
           echo "INITRAMFS READY"
 
-      - name: Boot Phase1 kernel under QEMU (up to 3 min)
+      - name: Boot under QEMU vexpress-a9 (up to 3 min)
         run: |
           set -euo pipefail
           LOG="$RUNNER_TEMP/phase1-qemu.log"
           timeout 180 qemu-system-arm \
-            -M virt \
-            -cpu cortex-a15 \
-            -m 256 \
+            -M vexpress-a9 \
+            -cpu cortex-a9 \
+            -m 512 \
             -nographic \
             -kernel source/linux/arch/arm/boot/zImage \
+            -dtb source/linux/arch/arm/boot/dts/vexpress-v2p-ca9.dtb \
             -initrd "$RUNNER_TEMP/initramfs.cpio.gz" \
             -append "console=ttyAMA0 rdinit=/init panic=3 loglevel=7" \
             2>&1 | tee "$LOG" || true
-          echo "=== QEMU LOG (last 60) ==="
-          tail -60 "$LOG"
+          echo "=== QEMU LOG (last 80) ==="
+          tail -80 "$LOG"
           if grep -q "PHASE1: userspace reached" "$LOG"; then
             echo "PHASE1_PASS: 4.14 kernel booted and reached /init"
             exit 0
@@ -151,13 +151,14 @@ jobs:
           echo "PHASE1_FAIL: kernel did not reach /init within timeout"
           exit 1
 
-      - name: Upload phase1 logs and kernel
+      - name: Upload phase1 evidence
         if: always()
         uses: actions/upload-artifact@v7.0.1
         with:
-          name: phase1-qemu-boot-evidence
+          name: phase1-vexpress-a9-evidence
           path: |
             source/linux/arch/arm/boot/zImage
+            source/linux/arch/arm/boot/dts/vexpress-v2p-ca9.dtb
             ${{ runner.temp }}/phase1-qemu.log
           if-no-files-found: warn
           retention-days: 7
