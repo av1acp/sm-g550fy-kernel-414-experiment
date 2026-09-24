@@ -1,4 +1,4 @@
-name: Phase1 - QEMU ARM virt boot proof for Linux 4.14
+name: Phase1 - QEMU vexpress-a9 boot proof for Linux 4.14
 
 on:
   workflow_dispatch:
@@ -14,7 +14,7 @@ jobs:
       - name: Checkout experiment repository
         uses: actions/checkout@v7.0.1
 
-      - name: Install build + QEMU packages
+      - name: Install build and QEMU packages
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
@@ -22,22 +22,21 @@ jobs:
             libncurses-dev libssl-dev xz-utils qemu-system-arm qemu-utils \
             gcc-arm-linux-gnueabi binutils-arm-linux-gnueabi
 
-      - name: Restore cached ARM32 toolchain
+      - name: Restore cached ARM32 kernel toolchain
         id: toolchain-cache
         uses: actions/cache@v6.1.0
         with:
           path: .toolchain/arm-eabi-4.9
           key: burstlam-arm-eabi-4.9-v1
 
-      - name: Fetch era-matched ARM32 toolchain
+      - name: Fetch era-matched ARM32 kernel toolchain
         if: ${{ steps.toolchain-cache.outputs.cache-hit != 'true' }}
         run: |
           set -euo pipefail
           TC="$GITHUB_WORKSPACE/.toolchain/arm-eabi-4.9"
           mkdir -p "$(dirname "$TC")"
           rm -rf "$TC"
-          git clone --quiet --depth 1 \
-            https://github.com/burstlam/arm-eabi-4.9.git "$TC"
+          git clone --quiet --depth 1 https://github.com/burstlam/arm-eabi-4.9.git "$TC"
 
       - name: Fetch Linux 4.14 source
         run: |
@@ -67,68 +66,69 @@ jobs:
           make olddefconfig
           make -j"$(nproc)" zImage dtbs
           test -s arch/arm/boot/zImage
+          test -s arch/arm/boot/dts/vexpress-v2p-ca9.dtb
           file arch/arm/boot/zImage
           cat include/config/kernel.release
-          test -s arch/arm/boot/dts/vexpress-v2p-ca9.dtb
           ls -lh arch/arm/boot/zImage arch/arm/boot/dts/vexpress-v2p-ca9.dtb
 
-      - name: Build static ARM busybox
+      - name: Build tiny freestanding ARM initramfs init
         run: |
           set -euo pipefail
-          # busybox.net hosts no prebuilt armv7l; build it from source with
-          # Ubuntu's complete ARM sysroot. The KERNEL uses the era-matched
-          # toolchain above; busybox is userspace and is independent.
-          curl -fSL --retry 3 -o busybox.tar.bz2 \
-            https://busybox.net/downloads/busybox-1.36.1.tar.bz2
-          tar -xjf busybox.tar.bz2
-          cd busybox-1.36.1
-          make defconfig
-          sed -i 's/^# CONFIG_STATIC is not set/CONFIG_STATIC=y/' .config
-          sed -i 's/^# CONFIG_FEATURE_PREFER_APPLETS is not set/CONFIG_FEATURE_PREFER_APPLETS=y/' .config
-          sed -i 's/^# CONFIG_INSTALL_NO_USR is not set/CONFIG_INSTALL_NO_USR=y/' .config
-          grep -q '^CONFIG_STATIC=y' .config || { echo "FATAL: CONFIG_STATIC not enabled"; exit 1; }
-          yes '' | make oldconfig >/dev/null
-          make -j"$(nproc)" CROSS_COMPILE=arm-linux-gnueabi- ARCH=arm
-          file busybox
-          arm-linux-gnueabi-readelf -h busybox | grep -E 'Class|Machine'
-          if arm-linux-gnueabi-readelf -l busybox | grep -q INTERP; then
-            echo "FATAL: busybox dynamically linked"; exit 1
+          # No busybox/sysroot needed. This is a minimal static ARM binary
+          # that calls the Linux syscall ABI directly. It proves the 4.14
+          # kernel reached userspace (/init), and then powers off.
+          cat > "$RUNNER_TEMP/init.c" <<'EOF'
+          typedef unsigned long ulong;
+          static long sc3(long n, long a, long b, long c) {
+              register long r7 __asm__("r7") = n;
+              register long r0 __asm__("r0") = a;
+              register long r1 __asm__("r1") = b;
+              register long r2 __asm__("r2") = c;
+              __asm__ volatile("svc 0" : "+r"(r0) : "r"(r7), "r"(r1), "r"(r2) : "memory");
+              return r0;
+          }
+          static long sc0(long n, long a) {
+              register long r7 __asm__("r7") = n;
+              register long r0 __asm__("r0") = a;
+              __asm__ volatile("svc 0" : "+r"(r0) : "r"(r7) : "memory");
+              return r0;
+          }
+          void _start(void) {
+              static const char start[] = "===PHASE1_BOOT_PROOF_START===\n";
+              static const char ok[] = "PHASE1: userspace reached via /init\n";
+              static const char end[] = "===PHASE1_BOOT_PROOF_END===\n";
+              char uts[512];
+              sc3(4, 1, (long)start, sizeof(start) - 1);
+              sc0(122, (long)uts);
+              sc3(4, 1, (long)ok, sizeof(ok) - 1);
+              sc3(4, 1, (long)end, sizeof(end) - 1);
+              /* reboot(POWER_OFF): ARM reboot syscall #142, magic values. */
+              sc3(142, 0x01234567L, 0x4321fedcL, 0);
+              for (;;) __asm__ volatile("wfi");
+          }
+          EOF
+          arm-linux-gnueabi-gcc -marm -march=armv7-a -nostdlib -nostartfiles \
+            -static -ffreestanding -fno-stack-protector -fno-pic \
+            -Wl,-e,_start -o "$RUNNER_TEMP/init" "$RUNNER_TEMP/init.c"
+          file "$RUNNER_TEMP/init"
+          arm-linux-gnueabi-readelf -h "$RUNNER_TEMP/init" | grep -E 'Class|Machine'
+          if arm-linux-gnueabi-readelf -l "$RUNNER_TEMP/init" | grep -q INTERP; then
+            echo "FATAL: init is dynamically linked"; exit 1
           fi
-          echo "STATIC ARM BUSYBOX OK"
 
-      - name: Build minimal initramfs
-        run: |
-          set -euo pipefail
           ROOT="$RUNNER_TEMP/initramfs"
           mkdir -p "$ROOT/bin" "$ROOT/dev" "$ROOT/proc" "$ROOT/sys" "$ROOT/tmp"
-          cp busybox-1.36.1/busybox "$ROOT/bin/busybox"
-          chmod +x "$ROOT/bin/busybox"
-          # /init must be a real executable: use busybox itself as init
-          # (kernel also accepts a shell script with shebang, but a
-          # statically linked binary is the most reliable form).
-          cat > "$ROOT/init" <<'EOF'
-          #!/bin/sh
-          /bin/busybox --install -s /bin
-          mount -t proc proc /proc
-          mount -t sysfs sys /sys
-          mount -t devtmpfs dev /dev 2>/dev/null || true
-          echo "===PHASE1_BOOT_PROOF_START==="
-          /bin/busybox uname -a
-          echo "PHASE1: userspace reached, PID $$"
-          /bin/busybox id
-          echo "===PHASE1_BOOT_PROOF_END==="
-          /bin/busybox poweroff -f 2>/dev/null || /bin/busybox reboot -f
-          EOF
+          cp "$RUNNER_TEMP/init" "$ROOT/init"
           chmod +x "$ROOT/init"
-          # /dev/console is required for the kernel to attach stdin/stdout
-          # to the serial console. cpio is newc; device nodes are created
-          # in the guest by devtmpfs once /init runs.
+          sudo mknod -m 600 "$ROOT/dev/console" c 5 1
+          sudo mknod -m 666 "$ROOT/dev/null" c 1 3
+          sudo chown -R root:root "$ROOT"
           (cd "$ROOT" && find . -print0 | cpio --null -o -H newc --quiet) \
             | gzip -1 > "$RUNNER_TEMP/initramfs.cpio.gz"
           ls -lh "$RUNNER_TEMP/initramfs.cpio.gz"
-          echo "INITRAMFS READY"
+          echo "TINY INITRAMFS READY"
 
-      - name: Boot under QEMU vexpress-a9 (up to 3 min)
+      - name: Boot under QEMU vexpress-a9
         run: |
           set -euo pipefail
           LOG="$RUNNER_TEMP/phase1-qemu.log"
@@ -142,14 +142,10 @@ jobs:
             -initrd "$RUNNER_TEMP/initramfs.cpio.gz" \
             -append "console=ttyAMA0 rdinit=/init panic=3 loglevel=7" \
             2>&1 | tee "$LOG" || true
-          echo "=== QEMU LOG (last 80) ==="
-          tail -80 "$LOG"
-          if grep -q "PHASE1: userspace reached" "$LOG"; then
-            echo "PHASE1_PASS: 4.14 kernel booted and reached /init"
-            exit 0
-          fi
-          echo "PHASE1_FAIL: kernel did not reach /init within timeout"
-          exit 1
+          echo "=== QEMU LOG (last 100) ==="
+          tail -100 "$LOG"
+          grep -q "PHASE1: userspace reached via /init" "$LOG"
+          echo "PHASE1_PASS: 4.14 kernel booted to /init"
 
       - name: Upload phase1 evidence
         if: always()
