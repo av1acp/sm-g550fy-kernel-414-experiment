@@ -332,6 +332,22 @@ struct dw_mci_board {
 #define SDMMC_BUFADDRU		0x0A4
 
 /*
+ * Exynos3475 uses the Samsung extended register layout: every register
+ * between DBADDR and BUFADDR is spaced by 4 bytes.  Keep the generic DW-MMC
+ * layout for the other platforms.
+ */
+#ifdef CONFIG_SOC_EXYNOS3475
+#undef SDMMC_IDSTS
+#define SDMMC_IDSTS		0x090
+#undef SDMMC_IDINTEN
+#define SDMMC_IDINTEN		0x094
+#undef SDMMC_DSCADDR
+#define SDMMC_DSCADDR		0x098
+#undef SDMMC_BUFADDR
+#define SDMMC_BUFADDR		0x0A0
+#endif
+
+/*
  * Data offset is difference according to Version
  * Lower than 2.40a : data register offest is 0x100
  */

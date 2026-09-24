@@ -77,6 +77,8 @@ struct s3c24xx_uart_port {
 	unsigned char			rx_claimed;
 	unsigned char			tx_claimed;
 	unsigned int			pm_level;
+	unsigned int			check_separated_clk;
+	unsigned int			exynos3475;
 	unsigned long			baudclk_rate;
 	unsigned int			min_dma_size;
 
@@ -89,6 +91,7 @@ struct s3c24xx_uart_port {
 
 	struct s3c24xx_uart_info	*info;
 	struct clk			*clk;
+	struct clk			*separated_clk;
 	struct clk			*baudclk;
 	struct uart_port		port;
 	struct s3c24xx_serial_drv_data	*drv_data;

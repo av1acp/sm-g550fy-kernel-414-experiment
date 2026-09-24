@@ -32,6 +32,7 @@ enum dw_mci_exynos_type {
 	DW_MCI_TYPE_EXYNOS5420_SMU,
 	DW_MCI_TYPE_EXYNOS7,
 	DW_MCI_TYPE_EXYNOS7_SMU,
+	DW_MCI_TYPE_EXYNOS3475,
 };
 
 /* Exynos implementation specific driver private data */
@@ -46,6 +47,8 @@ struct dw_mci_exynos_priv_data {
 	u32				dqs_delay;
 	u32				saved_dqs_en;
 	u32				saved_strobe_ctrl;
+	struct clk			*mmc_a_clk;
+	struct clk			*mmc_b_clk;
 };
 
 static struct dw_mci_exynos_compatible {
@@ -73,6 +76,9 @@ static struct dw_mci_exynos_compatible {
 	}, {
 		.compatible	= "samsung,exynos7-dw-mshc-smu",
 		.ctrl_type	= DW_MCI_TYPE_EXYNOS7_SMU,
+	}, {
+		.compatible	= "samsung,exynos3475-dw-mshc",
+		.ctrl_type	= DW_MCI_TYPE_EXYNOS3475,
 	},
 };
 
@@ -80,7 +86,9 @@ static inline u8 dw_mci_exynos_get_ciu_div(struct dw_mci *host)
 {
 	struct dw_mci_exynos_priv_data *priv = host->priv;
 
-	if (priv->ctrl_type == DW_MCI_TYPE_EXYNOS4412)
+	if (priv->ctrl_type == DW_MCI_TYPE_EXYNOS3475)
+		return SDMMC_CLKSEL_GET_DIV(mci_readl(host, CLKSEL)) + 1;
+	else if (priv->ctrl_type == DW_MCI_TYPE_EXYNOS4412)
 		return EXYNOS4412_FIXED_CIU_CLK_DIV;
 	else if (priv->ctrl_type == DW_MCI_TYPE_EXYNOS4210)
 		return EXYNOS4210_FIXED_CIU_CLK_DIV;
@@ -269,6 +277,43 @@ static void dw_mci_exynos_adjust_clock(struct dw_mci *host, unsigned int wanted)
 	host->current_speed = 0;
 }
 
+static void dw_mci_exynos_set_bus_hz(struct dw_mci *host, unsigned int want_hz,
+				     unsigned int timing)
+{
+	struct dw_mci_exynos_priv_data *priv = host->priv;
+	struct clk *a_clk = priv->mmc_a_clk;
+	struct clk *b_clk = priv->mmc_b_clk;
+	unsigned int ciu_rate, div;
+	u32 clksel;
+	int ret;
+
+	if (!want_hz || IS_ERR(host->ciu_clk))
+		return;
+
+	if (timing == MMC_TIMING_MMC_HS400)
+		clksel = priv->sdr_timing;
+	else
+		clksel = priv->ddr_timing;
+	div = SDMMC_CLKSEL_GET_DIVRATIO(clksel);
+
+	ciu_rate = clk_get_rate(host->ciu_clk);
+	if (ciu_rate == want_hz * div)
+		return;
+
+	if (a_clk) {
+		ret = clk_set_rate(a_clk, want_hz * div);
+		if (ret)
+			dev_warn(host->dev, "Couldn't set MMC A clock: %d\n", ret);
+	}
+	if (b_clk) {
+		ret = clk_set_rate(b_clk, want_hz * div);
+		if (ret)
+			dev_warn(host->dev, "Couldn't set MMC B clock: %d\n", ret);
+	}
+
+	host->bus_hz = clk_get_rate(host->ciu_clk) / div;
+}
+
 static void dw_mci_exynos_set_ios(struct dw_mci *host, struct mmc_ios *ios)
 {
 	struct dw_mci_exynos_priv_data *priv = host->priv;
@@ -298,14 +343,19 @@ static void dw_mci_exynos_set_ios(struct dw_mci *host, struct mmc_ios *ios)
 	/* Configure setting for HS400 */
 	dw_mci_exynos_config_hs400(host, timing);
 
-	/* Configure clock rate */
-	dw_mci_exynos_adjust_clock(host, wanted);
+	/* Configure clock rate.  Exynos3475 adjusts the two upstream MMC
+	 * dividers first; the generic path adjusts the CIU clock directly. */
+	if (priv->ctrl_type == DW_MCI_TYPE_EXYNOS3475)
+		dw_mci_exynos_set_bus_hz(host, wanted, timing);
+	else
+		dw_mci_exynos_adjust_clock(host, wanted);
 }
 
 static int dw_mci_exynos_parse_dt(struct dw_mci *host)
 {
 	struct dw_mci_exynos_priv_data *priv;
 	struct device_node *np = host->dev->of_node;
+	bool exynos3475;
 	u32 timing[2];
 	u32 div = 0;
 	int idx;
@@ -319,8 +369,38 @@ static int dw_mci_exynos_parse_dt(struct dw_mci *host)
 		if (of_device_is_compatible(np, exynos_compat[idx].compatible))
 			priv->ctrl_type = exynos_compat[idx].ctrl_type;
 	}
+	exynos3475 = priv->ctrl_type == DW_MCI_TYPE_EXYNOS3475;
 
-	if (priv->ctrl_type == DW_MCI_TYPE_EXYNOS4412)
+	if (exynos3475) {
+		u32 timing4[4];
+
+		of_property_read_u32(np, "samsung,dw-mshc-ciu-div", &div);
+		priv->ciu_div = div;
+
+		ret = of_property_read_u32_array(np,
+			"samsung,dw-mshc-sdr-timing", timing4, 4);
+		if (ret)
+			return ret;
+		priv->sdr_timing = SDMMC_CLKSEL_TIMING4(timing4[0], timing4[1],
+							 timing4[2], timing4[3]);
+
+		ret = of_property_read_u32_array(np,
+			"samsung,dw-mshc-ddr-timing", timing4, 4);
+		if (ret)
+			return ret;
+		priv->ddr_timing = SDMMC_CLKSEL_TIMING4(timing4[0], timing4[1],
+							 timing4[2], timing4[3]);
+
+		priv->mmc_a_clk = devm_clk_get(host->dev, "dout_mmc_a");
+		if (IS_ERR(priv->mmc_a_clk))
+			priv->mmc_a_clk = NULL;
+		priv->mmc_b_clk = devm_clk_get(host->dev, "dout_mmc_b");
+		if (IS_ERR(priv->mmc_b_clk))
+			priv->mmc_b_clk = NULL;
+
+		host->priv = priv;
+		return 0;
+	} else if (priv->ctrl_type == DW_MCI_TYPE_EXYNOS4412)
 		priv->ciu_div = EXYNOS4412_FIXED_CIU_CLK_DIV - 1;
 	else if (priv->ctrl_type == DW_MCI_TYPE_EXYNOS4210)
 		priv->ciu_div = EXYNOS4210_FIXED_CIU_CLK_DIV - 1;
@@ -506,6 +586,8 @@ static const struct of_device_id dw_mci_exynos_match[] = {
 	{ .compatible = "samsung,exynos7-dw-mshc",
 			.data = &exynos_drv_data, },
 	{ .compatible = "samsung,exynos7-dw-mshc-smu",
+			.data = &exynos_drv_data, },
+	{ .compatible = "samsung,exynos3475-dw-mshc",
 			.data = &exynos_drv_data, },
 	{},
 };

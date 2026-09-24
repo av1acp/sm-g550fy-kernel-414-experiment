@@ -1,0 +1,34 @@
+/*
+ * Minimal contract extracted from the stock FY DTBH used by the Phase 11
+ * audit.  This is not a replacement board DT: it preserves only the nodes and
+ * properties that the 4.14 compatibility code must recognize.
+ */
+
+/ {
+	serial_2: uart@13820000 {
+		compatible = "samsung,exynos3475-uart";
+		samsung,separate-uart-clk;
+		reg = <0x13820000 0x100>;
+		interrupts = <0 423 0>;
+		clocks = <0x355>, <0x363>, <0x412>;
+		clock-names = "gate_pclk2", "gate_uart2", "sclk_uart2";
+	};
+
+	dwmmc_0: dwmmc0@13540000 {
+		compatible = "samsung,exynos3475-dw-mshc";
+		reg = <0x13540000 0x2000>;
+		interrupts = <0 245 0>;
+		clocks = <0x75>, <0x1aa>, <0x18e>, <0x18f>;
+		clock-names = "biu", "gate_ciu", "dout_mmc_a", "dout_mmc_b";
+		status = "okay";
+		samsung,dw-mshc-ciu-div = <0x03>;
+		samsung,dw-mshc-sdr-timing = <0x03 0x00 0x02 0x00>;
+		samsung,dw-mshc-sdr-hs-timing = <0x03 0x00 0x02 0x01>;
+		samsung,dw-mshc-ddr-timing = <0x03 0x00 0x04 0x02>;
+		samsung,dw-mshc-hs200-timing = <0x03 0x00 0x03 0x00>;
+		samsung,dw-mshc-ddr200-timing = <0x01 0x00 0x04 0x00>;
+		samsung,dw-mshc-ddr200-ulp-timing = <0x03 0x00 0x04 0x00>;
+		num-ref-clks = <0x0a>;
+		ciu_clkin = <0x16 0x2a 0x2a 0x54 0xa7 0x54 0xa7 0x14e 0x14e 0xa7>;
+	};
+};

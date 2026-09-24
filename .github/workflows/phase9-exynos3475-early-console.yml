@@ -80,6 +80,12 @@ jobs:
             drivers/pinctrl/samsung/pinctrl-samsung.c \
             drivers/pinctrl/samsung/pinctrl-samsung.h \
             drivers/pinctrl/samsung/pinctrl-exynos3475.c \
+            drivers/tty/serial/samsung.c \
+            drivers/tty/serial/samsung.h \
+            drivers/mmc/host/dw_mmc.c \
+            drivers/mmc/host/dw_mmc.h \
+            drivers/mmc/host/dw_mmc-exynos.c \
+            drivers/mmc/host/dw_mmc-exynos.h \
             arch/arm/boot/dts/Makefile \
             arch/arm/boot/dts/exynos3475-pinctrl.dtsi \
             arch/arm/boot/dts/exynos3475-universal3475.dts \
@@ -120,12 +126,16 @@ jobs:
           scripts/config --enable CONFIG_SERIAL_SAMSUNG
           scripts/config --enable CONFIG_SERIAL_SAMSUNG_CONSOLE
           scripts/config --enable CONFIG_CLKSRC_EXYNOS_MCT
+          scripts/config --enable CONFIG_MMC_DW
+          scripts/config --enable CONFIG_MMC_DW_PLTFM
+          scripts/config --enable CONFIG_MMC_DW_EXYNOS
           make olddefconfig
-          grep -E '^CONFIG_(SOC_EXYNOS3475|ARCH_EXYNOS3|ARCH_EXYNOS|COMMON_CLK_SAMSUNG|PINCTRL_EXYNOS_ARM|SERIAL_SAMSUNG|SERIAL_SAMSUNG_CONSOLE|CLKSRC_EXYNOS_MCT)=' .config | tee "$GITHUB_WORKSPACE/phase9-config.txt"
+          grep -E '^CONFIG_(SOC_EXYNOS3475|ARCH_EXYNOS3|ARCH_EXYNOS|COMMON_CLK_SAMSUNG|PINCTRL_EXYNOS_ARM|SERIAL_SAMSUNG|SERIAL_SAMSUNG_CONSOLE|CLKSRC_EXYNOS_MCT|MMC_DW|MMC_DW_PLTFM|MMC_DW_EXYNOS)=' .config | tee "$GITHUB_WORKSPACE/phase9-config.txt"
           test "$(grep -c '^CONFIG_SOC_EXYNOS3475=y$' .config)" -eq 1
           test "$(grep -c '^CONFIG_PINCTRL_EXYNOS_ARM=y$' .config)" -eq 1
           test "$(grep -c '^CONFIG_SERIAL_SAMSUNG=y$' .config)" -eq 1
           test "$(grep -c '^CONFIG_CLKSRC_EXYNOS_MCT=y$' .config)" -eq 1
+          test "$(grep -c '^CONFIG_MMC_DW_EXYNOS=y$' .config)" -eq 1
 
       - name: Compile Exynos3475 clock, pinctrl, MCT, and board DT
         working-directory: source/linux
@@ -140,6 +150,13 @@ jobs:
           make -j"$(nproc)" drivers/clk/samsung/composite-exynos3475.o
           make -j"$(nproc)" drivers/pinctrl/samsung/pinctrl-exynos3475.o
           make -j"$(nproc)" drivers/clocksource/exynos_mct.o
+          make -j"$(nproc)" drivers/tty/serial/samsung.o
+          test -s drivers/tty/serial/samsung.o
+          make -j"$(nproc)" drivers/mmc/host/dw_mmc.o \
+            drivers/mmc/host/dw_mmc-exynos.o
+          test -s drivers/mmc/host/dw_mmc.o
+          test -s drivers/mmc/host/dw_mmc-exynos.o
+          grep -q 'CONFIG_MMC_DW_EXYNOS=y' .config
           make -j"$(nproc)" dtbs
           test -s drivers/clk/samsung/clk-exynos3475.o
           test -s drivers/clk/samsung/composite-exynos3475.o
@@ -153,6 +170,11 @@ jobs:
           grep -q 'uart@13820000' "$GITHUB_WORKSPACE/phase9-expanded.dts"
           grep -q 'ttySAC2' "$GITHUB_WORKSPACE/phase9-expanded.dts"
           grep -q 'samsung,exynos3475-pinctrl' "$GITHUB_WORKSPACE/phase9-expanded.dts"
+          PHASE11_KERNEL_TREE="$GITHUB_WORKSPACE/source/linux" \
+            python3 "$GITHUB_WORKSPACE/scripts/phase11-uart-audit.py"
+          PHASE11_KERNEL_TREE="$GITHUB_WORKSPACE/source/linux" \
+            PHASE11_DTS="$GITHUB_WORKSPACE/docs/phase11-stock-dtbh-contract.dtsi" \
+            python3 "$GITHUB_WORKSPACE/scripts/phase11-emmc-audit.py"
           echo PHASE9_REAL_CMU_SERIAL2_MCT_COMPILE_PASS
 
       - name: Full Linux 4.14 image compile (same Phase 9 overlay)
@@ -185,6 +207,9 @@ jobs:
             source/linux/drivers/clk/samsung/composite-exynos3475.o
             source/linux/drivers/pinctrl/samsung/pinctrl-exynos3475.o
             source/linux/drivers/clocksource/exynos_mct.o
+            source/linux/drivers/tty/serial/samsung.o
+            source/linux/drivers/mmc/host/dw_mmc.o
+            source/linux/drivers/mmc/host/dw_mmc-exynos.o
             source/linux/arch/arm/boot/zImage
             source/linux/arch/arm/boot/dts/exynos3475-universal3475.dtb
           if-no-files-found: warn

@@ -45,6 +45,7 @@
 #include <linux/serial_s3c.h>
 #include <linux/delay.h>
 #include <linux/clk.h>
+#include <linux/clk-provider.h>
 #include <linux/cpufreq.h>
 #include <linux/of.h>
 
@@ -91,6 +92,31 @@ static void dbg(const char *fmt, ...)
 
 /* flag to ignore all characters coming in */
 #define RXSTAT_DUMMY_READ (0x10000000)
+
+#define MAX_CLK_NAME_LENGTH 15
+
+static inline int s3c24xx_uart_clock_enable(struct s3c24xx_uart_port *ourport)
+{
+	int ret = 0;
+
+	if (ourport->check_separated_clk) {
+		ret = clk_prepare_enable(ourport->separated_clk);
+		if (ret)
+			return ret;
+	}
+
+	ret = clk_prepare_enable(ourport->clk);
+	if (ret && ourport->check_separated_clk)
+		clk_disable_unprepare(ourport->separated_clk);
+	return ret;
+}
+
+static inline void s3c24xx_uart_clock_disable(struct s3c24xx_uart_port *ourport)
+{
+	clk_disable_unprepare(ourport->clk);
+	if (ourport->check_separated_clk)
+		clk_disable_unprepare(ourport->separated_clk);
+}
 
 static inline struct s3c24xx_uart_port *to_ourport(struct uart_port *port)
 {
@@ -1100,11 +1126,11 @@ static void s3c24xx_serial_pm(struct uart_port *port, unsigned int level,
 		if (!IS_ERR(ourport->baudclk))
 			clk_disable_unprepare(ourport->baudclk);
 
-		clk_disable_unprepare(ourport->clk);
+		s3c24xx_uart_clock_disable(ourport);
 		break;
 
 	case 0:
-		clk_prepare_enable(ourport->clk);
+		s3c24xx_uart_clock_enable(ourport);
 
 		if (!IS_ERR(ourport->baudclk))
 			clk_prepare_enable(ourport->baudclk);
@@ -1127,8 +1153,6 @@ static void s3c24xx_serial_pm(struct uart_port *port, unsigned int level,
  * pick the closest one and select that.
  *
 */
-
-#define MAX_CLK_NAME_LENGTH 15
 
 static inline int s3c24xx_serial_getsource(struct uart_port *port)
 {
@@ -1178,7 +1202,10 @@ static unsigned int s3c24xx_serial_getclk(struct s3c24xx_uart_port *ourport,
 		if (!(clk_sel & (1 << cnt)))
 			continue;
 
-		sprintf(clkname, "clk_uart_baud%d", cnt);
+		snprintf(clkname, sizeof(clkname), "clk_uart_baud%d", cnt);
+		if (ourport->exynos3475)
+			snprintf(clkname, sizeof(clkname), "sclk_uart%d",
+				 ourport->port.line);
 		clk = clk_get(ourport->port.dev, clkname);
 		if (IS_ERR(clk))
 			continue;
@@ -1683,6 +1710,7 @@ static int s3c24xx_serial_init_port(struct s3c24xx_uart_port *ourport,
 	struct uart_port *port = &ourport->port;
 	struct s3c2410_uartcfg *cfg = ourport->cfg;
 	struct resource *res;
+	char clkname[MAX_CLK_NAME_LENGTH];
 	int ret;
 
 	dbg("s3c24xx_serial_init_port: port=%p, platdev=%p\n", port, platdev);
@@ -1751,7 +1779,18 @@ static int s3c24xx_serial_init_port(struct s3c24xx_uart_port *ourport,
 		}
 	}
 
-	ourport->clk	= clk_get(&platdev->dev, "uart");
+	ourport->exynos3475 = platdev->dev.of_node &&
+		of_property_read_bool(platdev->dev.of_node,
+				      "samsung,separate-uart-clk");
+	ourport->check_separated_clk = ourport->exynos3475;
+
+	if (ourport->exynos3475) {
+		snprintf(clkname, sizeof(clkname), "gate_uart%d",
+			 ourport->port.line);
+		ourport->clk = clk_get(&platdev->dev, clkname);
+	} else {
+		ourport->clk = clk_get(&platdev->dev, "uart");
+	}
 	if (IS_ERR(ourport->clk)) {
 		pr_err("%s: Controller clock not found\n",
 				dev_name(&platdev->dev));
@@ -1759,7 +1798,19 @@ static int s3c24xx_serial_init_port(struct s3c24xx_uart_port *ourport,
 		goto err;
 	}
 
-	ret = clk_prepare_enable(ourport->clk);
+	if (ourport->exynos3475) {
+		snprintf(clkname, sizeof(clkname), "gate_pclk%d",
+			 ourport->port.line);
+		ourport->separated_clk = clk_get(&platdev->dev, clkname);
+		if (IS_ERR(ourport->separated_clk)) {
+			pr_err("uart: separate pclk not found\n");
+			ret = PTR_ERR(ourport->separated_clk);
+			clk_put(ourport->clk);
+			goto err;
+		}
+	}
+
+	ret = s3c24xx_uart_clock_enable(ourport);
 	if (ret) {
 		pr_err("uart: clock failed to prepare+enable: %d\n", ret);
 		clk_put(ourport->clk);
@@ -1815,9 +1866,13 @@ static int s3c24xx_serial_probe(struct platform_device *pdev)
 
 	if (np) {
 		ret = of_alias_get_id(np, "serial");
+		if (ret < 0)
+			ret = of_alias_get_id(np, "uart");
 		if (ret >= 0)
 			index = ret;
 	}
+	if (index < 0 || index >= ARRAY_SIZE(s3c24xx_serial_ports))
+		return -EINVAL;
 
 	dbg("s3c24xx_serial_probe(%p) %d\n", pdev, index);
 
@@ -1874,7 +1929,7 @@ static int s3c24xx_serial_probe(struct platform_device *pdev)
 	 * so that a potential re-enablement through the pm-callback overlaps
 	 * and keeps the clock enabled in this case.
 	 */
-	clk_disable_unprepare(ourport->clk);
+	s3c24xx_uart_clock_disable(ourport);
 
 	ret = s3c24xx_serial_cpufreq_register(ourport);
 	if (ret < 0)
@@ -1917,9 +1972,9 @@ static int s3c24xx_serial_resume(struct device *dev)
 	struct s3c24xx_uart_port *ourport = to_ourport(port);
 
 	if (port) {
-		clk_prepare_enable(ourport->clk);
+		s3c24xx_uart_clock_enable(ourport);
 		s3c24xx_serial_resetport(port, s3c24xx_port_to_cfg(port));
-		clk_disable_unprepare(ourport->clk);
+		s3c24xx_uart_clock_disable(ourport);
 
 		uart_resume_port(&s3c24xx_uart_drv, port);
 	}
@@ -1940,9 +1995,9 @@ static int s3c24xx_serial_resume_noirq(struct device *dev)
 				uintm &= ~S3C64XX_UINTM_TXD_MSK;
 			if (rx_enabled(port))
 				uintm &= ~S3C64XX_UINTM_RXD_MSK;
-			clk_prepare_enable(ourport->clk);
+			s3c24xx_uart_clock_enable(ourport);
 			wr_regl(port, S3C64XX_UINTM, uintm);
-			clk_disable_unprepare(ourport->clk);
+			s3c24xx_uart_clock_disable(ourport);
 		}
 	}
 
@@ -2108,6 +2163,11 @@ s3c24xx_serial_get_options(struct uart_port *port, int *baud,
 		sprintf(clk_name, "clk_uart_baud%d", clk_sel);
 
 		clk = clk_get(port->dev, clk_name);
+		if (IS_ERR(clk) && to_ourport(port)->exynos3475) {
+			snprintf(clk_name, sizeof(clk_name), "sclk_uart%d",
+				 port->line);
+			clk = clk_get(port->dev, clk_name);
+		}
 		if (!IS_ERR(clk))
 			rate = clk_get_rate(clk);
 		else
@@ -2346,11 +2406,18 @@ static struct s3c24xx_serial_drv_data exynos5433_serial_drv_data = {
 	.fifosize = { 64, 256, 16, 256 },
 };
 
+static struct s3c24xx_serial_drv_data exynos3475_serial_drv_data = {
+	EXYNOS_COMMON_SERIAL_DRV_DATA,
+	.fifosize = { 64, 256, 256 },
+};
+
 #define EXYNOS4210_SERIAL_DRV_DATA ((kernel_ulong_t)&exynos4210_serial_drv_data)
 #define EXYNOS5433_SERIAL_DRV_DATA ((kernel_ulong_t)&exynos5433_serial_drv_data)
+#define EXYNOS3475_SERIAL_DRV_DATA ((kernel_ulong_t)&exynos3475_serial_drv_data)
 #else
 #define EXYNOS4210_SERIAL_DRV_DATA (kernel_ulong_t)NULL
 #define EXYNOS5433_SERIAL_DRV_DATA (kernel_ulong_t)NULL
+#define EXYNOS3475_SERIAL_DRV_DATA (kernel_ulong_t)NULL
 #endif
 
 static const struct platform_device_id s3c24xx_serial_driver_ids[] = {
@@ -2375,6 +2442,9 @@ static const struct platform_device_id s3c24xx_serial_driver_ids[] = {
 	}, {
 		.name		= "exynos5433-uart",
 		.driver_data	= EXYNOS5433_SERIAL_DRV_DATA,
+	}, {
+		.name		= "exynos3475-uart",
+		.driver_data	= EXYNOS3475_SERIAL_DRV_DATA,
 	},
 	{ },
 };
@@ -2396,6 +2466,8 @@ static const struct of_device_id s3c24xx_uart_dt_match[] = {
 		.data = (void *)EXYNOS4210_SERIAL_DRV_DATA },
 	{ .compatible = "samsung,exynos5433-uart",
 		.data = (void *)EXYNOS5433_SERIAL_DRV_DATA },
+	{ .compatible = "samsung,exynos3475-uart",
+		.data = (void *)EXYNOS3475_SERIAL_DRV_DATA },
 	{},
 };
 MODULE_DEVICE_TABLE(of, s3c24xx_uart_dt_match);
@@ -2510,6 +2582,8 @@ static int __init s5pv210_early_console_setup(struct earlycon_device *device,
 OF_EARLYCON_DECLARE(s5pv210, "samsung,s5pv210-uart",
 			s5pv210_early_console_setup);
 OF_EARLYCON_DECLARE(exynos4210, "samsung,exynos4210-uart",
+			s5pv210_early_console_setup);
+OF_EARLYCON_DECLARE(exynos3475, "samsung,exynos3475-uart",
 			s5pv210_early_console_setup);
 #endif
 
