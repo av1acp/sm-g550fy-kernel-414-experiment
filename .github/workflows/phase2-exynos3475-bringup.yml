@@ -1,0 +1,125 @@
+name: Phase2 - Exynos3475 board bring-up compile (no flash)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  phase2:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    steps:
+      - name: Checkout experiment repository
+        uses: actions/checkout@v7.0.1
+
+      - name: Install build packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            bc bison flex build-essential ca-certificates ccache git \
+            libncurses-dev libssl-dev xz-utils
+
+      - name: Restore cached ARM32 toolchain
+        id: toolchain-cache
+        uses: actions/cache@v6.1.0
+        with:
+          path: .toolchain/arm-eabi-4.9
+          key: burstlam-arm-eabi-4.9-v1
+
+      - name: Fetch era-matched ARM32 toolchain
+        if: ${{ steps.toolchain-cache.outputs.cache-hit != 'true' }}
+        run: |
+          set -euo pipefail
+          TC="$GITHUB_WORKSPACE/.toolchain/arm-eabi-4.9"
+          mkdir -p "$(dirname "$TC")"
+          rm -rf "$TC"
+          git clone --quiet --depth 1 https://github.com/burstlam/arm-eabi-4.9.git "$TC"
+
+      - name: Fetch Linux 4.14 and 3.10 donor tree
+        run: |
+          set -euo pipefail
+          mkdir -p source
+          cd source
+          curl -fSL --retry 3 -o linux-4.14.tar.xz \
+            https://cdn.kernel.org/pub/linux/kernel/v4.x/linux-4.14.tar.xz
+          tar -xf linux-4.14.tar.xz
+          mv linux-4.14 linux
+          # Donor = working FY 3.10 tree (contains exynos3475 clock/pinctrl/uart)
+          git clone --depth 1 --branch cm-14.1 \
+            https://github.com/Exynos3475/android_kernel_samsung_exynos3475.git donor
+          du -sh donor
+          test -f donor/drivers/clocks/arch_exynos.c
+          test -f donor/drivers/clocks/arch_exynos4/
+          test -f donor/drivers/clocks/arch_exynos4/clock-exynos4.c
+          echo "DONOR TREE READY"
+
+      - name: Port Exynos3475 board and early drivers from donor
+        working-directory: source/linux
+        run: |
+          set -euo pipefail
+          DONOR=../donor
+          mkdir -p arch/arm/mach-exynos
+          # Copy the Exynos mach directory (board init) as a starting point.
+          # 4.14 uses a different directory layout; files are copied for
+          # reference/porting, not blindly compiled.
+          mkdir -p ported/mach-exynos
+          if [ -d "$DONOR/arch/arm/mach-exynos" ]; then
+            cp -a "$DONOR/arch/arm/mach-exynos/." ported/mach-exynos/ || true
+          fi
+          echo "=== donor mach-exynos file count ==="
+          find ported/mach-exynos -type f | wc -l
+          echo "=== donor exynos3475 board files ==="
+          find ported/mach-exynos -type f -iname '*exynos3475*' -o -iname '*universal3475*' | head -20
+
+      - name: Compile a compile-only defconfig with Exynos support
+        working-directory: source/linux
+        run: |
+          set -euo pipefail
+          TC="$GITHUB_WORKSPACE/.toolchain/arm-eabi-4.9"
+          export ARCH=arm
+          export CROSS_COMPILE="$TC/bin/arm-eabi-"
+          export KBUILD_BUILD_USER=phase2
+          export KBUILD_BUILD_HOST=runner
+          if grep -q '^YYLTYPE yylloc$' scripts/dtc/dtc-parser.tab.c_shipped; then
+            sed -i '0,/^YYLTYPE yylloc$/s//extern YYLTYPE yylloc/' \
+              scripts/dtc/dtc-parser.tab.c_shipped
+          fi
+          # 4.14 supports Exynos4 upstream (ARCH_EXYNOS4 / ARCH_EXYNOS)
+          make exynos4_defconfig 2>/dev/null || make exynos_defconfig 2>/dev/null || \
+            make multi_v7_defconfig
+          make olddefconfig
+          make -j"$(nproc)" zImage
+          test -s arch/arm/boot/zImage
+          file arch/arm/boot/zImage
+          cat include/config/kernel.release
+          ls -lh arch/arm/boot/zImage
+          echo "PHASE2_COMPILE_PASS: 4.14 Exynos4-configured kernel built"
+
+      - name: Produce donor delta report (read-only)
+        run: |
+          set -euo pipefail
+          cd source
+          # Count driver families that the 3.10 donor provides vs 4.14 upstream.
+          echo "=== driver families in donor 3.10 that 4.14 lacks (first 80) ==="
+          for d in $(cd donor/drivers && find . -maxdepth 1 -type d | sed 's#./##' | sort); do
+            if [ ! -d "linux/drivers/$d" ]; then
+              echo "  DONOR_ONLY $d"
+            fi
+          done
+          echo "=== exynos driver line counts (donor 3.10 vs 4.14) ==="
+          printf "donor clocks: "; find donor/drivers/clocks -name '*.c' | xargs wc -l 2>/dev/null | tail -1 || true
+          printf "linux 4.14 clocks: "; find linux/drivers/clocks -name '*.c' | xargs wc -l 2>/dev/null | tail -1 || true
+          printf "donor soc drivers: "; find donor/drivers/soc -name '*.c' | xargs wc -l 2>/dev/null | tail -1 || true
+          printf "linux 4.14 soc drivers: "; find linux/drivers/soc -name '*.c' | xargs wc -l 2>/dev/null | tail -1 || true
+
+      - name: Upload phase2 compile artifact
+        if: always()
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: phase2-exynos3475-compile-evidence
+          path: |
+            source/linux/arch/arm/boot/zImage
+          if-no-files-found: warn
+          retention-days: 7
