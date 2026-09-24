@@ -58,6 +58,14 @@ jobs:
               scripts/dtc/dtc-parser.tab.c_shipped
             echo "applied dtc yylloc extern fix"
           fi
+          # gcc >= 10 defaults to -fno-common; old dtc ships both a
+          # parser and lexer copy of YYLTYPE yylloc -> duplicate symbol at
+          # link. Make the parser copy extern (same fix used in the 3.10 build).
+          if grep -q '^YYLTYPE yylloc;$' scripts/dtc/dtc-parser.tab.c_shipped; then
+            sed -i 's/^YYLTYPE yylloc;$/extern YYLTYPE yylloc;/' \
+              scripts/dtc/dtc-parser.tab.c_shipped
+            echo "applied dtc yylloc extern fix"
+          fi
           make multi_v7_defconfig
           scripts/config --set-str LOCALVERSION "-port-exp-phase0" || true
           make olddefconfig
