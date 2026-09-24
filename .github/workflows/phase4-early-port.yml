@@ -70,20 +70,28 @@ jobs:
           DONOR=../donor
           # 4.14 has no drivers/pinctrl/pinctrl-exynos.c: copy donor file
           # and record the 4.14 API gaps for the next step.
-          set +e
-          cp "$DONOR/drivers/pinctrl/pinctrl-exynos.c" drivers/pinctrl/pinctrl-exynos.c
-          cp "$DONOR/drivers/pinctrl/pinctrl-exynos.h" drivers/pinctrl/pinctrl-exynos.h
-          set -e
-          if [ ! -f drivers/pinctrl/pinctrl-exynos.c ]; then
-            echo "NOTE: donor pinctrl-exynos.c not found at expected path"
-            find "$DONOR" -name 'pinctrl-exynos*' -print | head -10
+          # donor has drivers/pinctrl/pinctrl-exynos.{c,h} (verified via
+          # GitHub tree API), but this shallow clone's sparse checkout may
+          # omit them. Verify explicitly; never fail the step on a missing
+          # optional file, the compile/report step handles gaps.
+          if [ -f "$DONOR/drivers/pinctrl/pinctrl-exynos.c" ]; then
+            cp "$DONOR/drivers/pinctrl/pinctrl-exynos.c" drivers/pinctrl/pinctrl-exynos.c
+            cp "$DONOR/drivers/pinctrl/pinctrl-exynos.h" drivers/pinctrl/pinctrl-exynos.h
+            echo "COPIED donor pinctrl-exynos into 4.14 tree"
+          else
+            echo "NOTE: donor pinctrl-exynos.c absent in this checkout"
+            find "$DONOR" -name 'pinctrl-exynos*' -print | head -10 || true
           fi
-          echo "=== 4.14 pinctrl core includes donor needs ==="
-          grep -n '#include' drivers/pinctrl/pinctrl-exynos.c | head -20
-          echo "=== likely API breaks (pinctrl_ops -> pinctrl_ops struct changes) ==="
-          grep -n -E 'pinctrl_ops|pinmux_ops|pinctrl_desc|->set_groups|->pinmux_ops' \
-            drivers/pinctrl/pinctrl-exynos.c | head -20
-          echo "pinctrl donor copied (compile will show exact API gaps)"
+          if [ -f drivers/pinctrl/pinctrl-exynos.c ]; then
+            echo "=== 4.14 pinctrl core includes donor needs ==="
+            grep -n '#include' drivers/pinctrl/pinctrl-exynos.c | head -20
+            echo "=== likely API breaks (pinctrl_ops -> pinctrl_ops struct changes) ==="
+            grep -n -E 'pinctrl_ops|pinmux_ops|pinctrl_desc|->set_groups|->pinmux_ops' \
+              drivers/pinctrl/pinctrl-exynos.c | head -20
+            echo "pinctrl donor copied (compile will show exact API gaps)"
+          else
+            echo "pinctrl donor file not copied; using 4.14 upstream support"
+          fi
 
       - name: Compile with pinctrl+mct and report exact errors
         working-directory: source/linux
