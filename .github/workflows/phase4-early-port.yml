@@ -1,0 +1,129 @@
+name: Phase4 - Exynos3475 early bring-up (pinctrl + MCT port, compile only)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  phase4:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Checkout experiment repository
+        uses: actions/checkout@v7.0.1
+
+      - name: Install build packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            bc bison flex build-essential ca-certificates ccache git \
+            libncurses-dev libssl-dev xz-utils
+
+      - name: Restore cached ARM32 toolchain
+        id: toolchain-cache
+        uses: actions/cache@v6.1.0
+        with:
+          path: .toolchain/arm-eabi-4.9
+          key: burstlam-arm-eabi-4.9-v1
+
+      - name: Fetch era-matched ARM32 toolchain
+        if: ${{ steps.toolchain-cache.outputs.cache-hit != 'true' }}
+        run: |
+          set -euo pipefail
+          TC="$GITHUB_WORKSPACE/.toolchain/arm-eabi-4.9"
+          mkdir -p "$(dirname "$TC")"
+          rm -rf "$TC"
+          git clone --quiet --depth 1 https://github.com/burstlam/arm-eabi-4.9.git "$TC"
+
+      - name: Fetch Linux 4.14 and donor tree
+        run: |
+          set -euo pipefail
+          mkdir -p source
+          cd source
+          curl -fSL --retry 3 -o linux-4.14.tar.xz \
+            https://cdn.kernel.org/pub/linux/kernel/v4.x/linux-4.14.tar.xz
+          tar -xf linux-4.14.tar.xz
+          mv linux-4.14 linux
+          git clone --quiet --depth 1 --branch cm-14.1 \
+            https://github.com/Exynos3475/android_kernel_samsung_exynos3475.git donor
+
+      - name: Port exynos_mct clocksource to 4.14 API
+        run: |
+          set -uo pipefail
+          cd source/linux
+          # 4.14 ALREADY has an exynos_mct driver. The donor copy from 3.10
+          # uses the removed asm/sched_clock.h. We must NOT overwrite the
+          # upstream 4.14 version: use upstream and only register it.
+          echo "=== upstream 4.14 exynos_mct.c header check ==="
+          grep -n '#include' drivers/clocksource/exynos_mct.c | head -12
+          echo "=== diff donor vs upstream (API changes only) ==="
+          diff -u ../../donor/drivers/clocksource/exynos_mct.c \
+                 drivers/clocksource/exynos_mct.c | head -40 || true
+          # no mechanical copy: upstream already carries Exynos MCT support.
+
+      - name: Port pinctrl-exynos.c from donor into 4.14
+        run: |
+          set -uo pipefail
+          cd source/linux
+          DONOR=../donor
+          # 4.14 has no drivers/pinctrl/pinctrl-exynos.c: copy donor file
+          # and record the 4.14 API gaps for the next step.
+          cp "$DONOR/drivers/pinctrl/pinctrl-exynos.c" drivers/pinctrl/pinctrl-exynos.c
+          cp "$DONOR/drivers/pinctrl/pinctrl-exynos.h" drivers/pinctrl/pinctrl-exynos.h
+          echo "=== 4.14 pinctrl core includes donor needs ==="
+          grep -n '#include' drivers/pinctrl/pinctrl-exynos.c | head -20
+          echo "=== likely API breaks (pinctrl_ops -> pinctrl_ops struct changes) ==="
+          grep -n -E 'pinctrl_ops|pinmux_ops|pinctrl_desc|->set_groups|->pinmux_ops' \
+            drivers/pinctrl/pinctrl-exynos.c | head -20
+          echo "pinctrl donor copied (compile will show exact API gaps)"
+
+      - name: Compile with pinctrl+mct and report exact errors
+        working-directory: source/linux
+        run: |
+          set -uo pipefail
+          TC="$GITHUB_WORKSPACE/.toolchain/arm-eabi-4.9"
+          export ARCH=arm
+          export CROSS_COMPILE="$TC/bin/arm-eabi-"
+          export KBUILD_BUILD_USER=phase4
+          export KBUILD_BUILD_HOST=runner
+          if grep -q '^YYLTYPE yylloc$' scripts/dtc/dtc-parser.tab.c_shipped; then
+            sed -i '0,/^YYLTYPE yylloc$/s//extern YYLTYPE yylloc/' \
+              scripts/dtc/dtc-parser.tab.c_shipped
+          fi
+          make exynos_defconfig
+          scripts/config --enable CONFIG_PINCTRL_EXYNOS || true
+          scripts/config --enable CONFIG_CLOCK_EXYNOS4 || true
+          scripts/config --enable CONFIG_SERIAL_8250_DW || true
+          scripts/config --enable CONFIG_MMC_DW || true
+          make olddefconfig
+          set +e
+          make -k -j"$(nproc)" zImage dtbs > "$GITHUB_WORKSPACE/phase4-build.log" 2>&1
+          RC=$?
+          set -e
+          echo "MAKE_RC=$RC"
+          echo "=== pinctrl-exynos compile lines ==="
+          grep -E 'pinctrl-exynos|exynos_mct' "$GITHUB_WORKSPACE/phase4-build.log" | head -30 || true
+          echo "=== all errors (first 30) ==="
+          grep 'error:' "$GITHUB_WORKSPACE/phase4-build.log" | head -30 || true
+          if [ "$RC" -eq 0 ] && [ -s arch/arm/boot/zImage ]; then
+            file arch/arm/boot/zImage
+            cat include/config/kernel.release
+            ls -lh arch/arm/boot/zImage
+            echo "PHASE4_COMPILE_PASS"
+          else
+            echo "PHASE4_PORT_NEEDS_WORK (expected; see exact errors)"
+            exit 0
+          fi
+
+      - name: Upload phase4 evidence
+        if: always()
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: phase4-pinctrl-mct-port-evidence
+          path: |
+            ${{ github.workspace }}/phase4-build.log
+            source/linux/arch/arm/boot/zImage
+          if-no-files-found: warn
+          retention-days: 14
