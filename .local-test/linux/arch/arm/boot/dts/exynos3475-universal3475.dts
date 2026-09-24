@@ -1,0 +1,102 @@
+/*
+ * Minimal Linux 4.14 Exynos3475/universal3475 board description.
+ *
+ * This is a Phase 8 compile-and-bring-up skeleton, not a replacement for
+ * the donor board DTS. It exposes the real SoC clock provider, the real
+ * Exynos3475 CMU pin banks, and UART0 for an early-console experiment.
+ * Unsupported peripherals are intentionally omitted.
+ */
+
+/dts-v1/;
+#include <dt-bindings/interrupt-controller/arm-gic.h>
+#include <dt-bindings/interrupt-controller/irq.h>
+#include <dt-bindings/clock/exynos3475.h>
+#include "exynos3475-pinctrl.dtsi"
+
+/ {
+	model = "Samsung UNIVERSAL3475 board based on EXYNOS3475";
+	compatible = "samsung,universal3475", "samsung,exynos3475";
+	#address-cells = <1>;
+	#size-cells = <1>;
+	interrupt-parent = <&gic>;
+
+	aliases {
+		pinctrl0 = &pinctrl_0;
+		pinctrl1 = &pinctrl_1;
+		pinctrl2 = &pinctrl_2;
+		pinctrl3 = &pinctrl_3;
+		pinctrl4 = &pinctrl_4;
+		pinctrl5 = &pinctrl_5;
+		pinctrl6 = &pinctrl_6;
+		pinctrl7 = &pinctrl_7;
+		uart0 = &serial_0;
+	};
+
+	chosen {
+		bootargs = "console=ttySAC0,115200 earlycon";
+		stdout-path = &serial_0;
+	};
+
+	fixed-rate-clocks {
+		oscclk: clock-26mhz {
+			compatible = "fixed-clock";
+			#clock-cells = <0>;
+			clock-frequency = <26000000>;
+			clock-output-names = "xxti";
+		};
+	};
+
+	cpus {
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		cpu0: cpu@0 {
+			device_type = "cpu";
+			compatible = "arm,cortex-a7";
+			reg = <0>;
+			clock-frequency = <1000000000>;
+			clocks = <&clock 22>;
+			clock-names = "cpu";
+		};
+
+		cpu1: cpu@1 {
+			device_type = "cpu";
+			compatible = "arm,cortex-a7";
+			reg = <1>;
+			clock-frequency = <1000000000>;
+		};
+	};
+
+	gic: interrupt-controller@10c00000 {
+		compatible = "arm,cortex-a15-gic";
+		#interrupt-cells = <3>;
+		interrupt-controller;
+		reg = <0x10c01000 0x1000>,
+		      <0x10c02000 0x1000>,
+		      <0x10c04000 0x2000>,
+		      <0x10c06000 0x2000>;
+		interrupts = <1 9 0xf04>;
+	};
+
+	chipid: chipid@10000000 {
+		compatible = "samsung,exynos4210-chipid";
+		reg = <0x10000000 0x100>;
+	};
+
+	clock: clock-controller@10010000 {
+		compatible = "samsung,exynos3475-clock";
+		reg = <0x10010000 0x1000>;
+		#clock-cells = <1>;
+	};
+
+	serial_0: uart@13800000 {
+		compatible = "samsung,exynos4210-uart";
+		reg = <0x13800000 0x100>;
+		interrupts = <0 421 0>;
+		clocks = <&clock 357>, <&clock 361>;
+		clock-names = "uart", "clk_uart_baud0";
+		pinctrl-names = "default";
+		pinctrl-0 = <&uart0_bus>;
+		status = "okay";
+	};
+};

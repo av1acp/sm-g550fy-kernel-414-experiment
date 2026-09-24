@@ -1206,6 +1206,8 @@ static const struct of_device_id samsung_pinctrl_dt_match[] = {
 		.data = exynos5410_pin_ctrl },
 	{ .compatible = "samsung,exynos5420-pinctrl",
 		.data = exynos5420_pin_ctrl },
+	{ .compatible = "samsung,exynos3475-pinctrl",
+		.data = exynos3475_pin_ctrl },
 	{ .compatible = "samsung,s5pv210-pinctrl",
 		.data = s5pv210_pin_ctrl },
 #endif

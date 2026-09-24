@@ -1,0 +1,147 @@
+name: Phase8 - Exynos3475 machine, CMU map, pinctrl and board DT (compile only)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: phase8-exynos3475-early-board
+  cancel-in-progress: true
+
+jobs:
+  phase8:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Checkout experiment repository
+        uses: actions/checkout@v7.0.1
+
+      - name: Install build packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            bc bison flex build-essential ca-certificates ccache git \
+            libncurses-dev libssl-dev xz-utils device-tree-compiler
+
+      - name: Restore cached ARM32 toolchain
+        id: toolchain-cache
+        uses: actions/cache@v6.1.0
+        with:
+          path: .toolchain/arm-eabi-4.9
+          key: burstlam-arm-eabi-4.9-v1
+
+      - name: Fetch era-matched ARM32 toolchain
+        if: ${{ steps.toolchain-cache.outputs.cache-hit != 'true' }}
+        run: |
+          set -euo pipefail
+          TC="$GITHUB_WORKSPACE/.toolchain/arm-eabi-4.9"
+          mkdir -p "$(dirname "$TC")"
+          rm -rf "$TC"
+          git clone --quiet --depth 1 https://github.com/burstlam/arm-eabi-4.9.git "$TC"
+          "$TC/bin/arm-eabi-gcc" --version | head -1
+
+      - name: Fetch fresh Linux 4.14
+        run: |
+          set -euo pipefail
+          mkdir -p source
+          cd source
+          curl -fSL --retry 3 -o linux-4.14.tar.xz \
+            https://cdn.kernel.org/pub/linux/kernel/v4.x/linux-4.14.tar.xz
+          tar -xf linux-4.14.tar.xz
+          mv linux-4.14 linux
+
+      - name: Apply Phase 8 board source overlay
+        run: |
+          set -euo pipefail
+          SRC="$GITHUB_WORKSPACE/source/linux"
+          PORT="$GITHUB_WORKSPACE/.local-test/linux"
+          for f in \
+            arch/arm/mach-exynos/exynos.c \
+            arch/arm/mach-exynos/include/mach/map.h \
+            arch/arm/mach-exynos/include/mach/regs-clock-exynos3475.h \
+            arch/arm/mach-exynos/Kconfig \
+            drivers/clk/samsung/Makefile \
+            drivers/clk/samsung/clk-exynos3475.c \
+            drivers/clk/samsung/composite-exynos3475.c \
+            drivers/clk/samsung/composite-exynos3475.h \
+            drivers/pinctrl/samsung/Makefile \
+            drivers/pinctrl/samsung/pinctrl-samsung.c \
+            drivers/pinctrl/samsung/pinctrl-samsung.h \
+            drivers/pinctrl/samsung/pinctrl-exynos3475.c \
+            arch/arm/boot/dts/Makefile \
+            arch/arm/boot/dts/exynos3475-pinctrl.dtsi \
+            arch/arm/boot/dts/exynos3475-universal3475.dts \
+            include/dt-bindings/clock/exynos3475.h \
+            scripts/dtc/dtc-parser.tab.c_shipped; do
+            test -f "$PORT/$f"
+            mkdir -p "$SRC/$(dirname "$f")"
+            cp "$PORT/$f" "$SRC/$f"
+          done
+          {
+            echo "=== Phase 8 overlay hashes ==="
+            sha256sum \
+              "$SRC/arch/arm/mach-exynos/exynos.c" \
+              "$SRC/arch/arm/mach-exynos/include/mach/map.h" \
+              "$SRC/drivers/clk/samsung/clk-exynos3475.c" \
+              "$SRC/drivers/clk/samsung/composite-exynos3475.c" \
+              "$SRC/drivers/pinctrl/samsung/pinctrl-exynos3475.c" \
+              "$SRC/arch/arm/boot/dts/exynos3475-pinctrl.dtsi" \
+              "$SRC/arch/arm/boot/dts/exynos3475-universal3475.dts"
+          } | tee "$GITHUB_WORKSPACE/phase8-overlay.txt"
+
+      - name: Configure Exynos3475 early-board gate
+        working-directory: source/linux
+        run: |
+          set -euo pipefail
+          export ARCH=arm
+          export CROSS_COMPILE="$GITHUB_WORKSPACE/.toolchain/arm-eabi-4.9/bin/arm-eabi-"
+          export KBUILD_BUILD_USER=phase8
+          export KBUILD_BUILD_HOST=runner
+          make exynos_defconfig
+          scripts/config --enable CONFIG_SOC_EXYNOS3475
+          scripts/config --enable CONFIG_PINCTRL_EXYNOS
+          scripts/config --enable CONFIG_PINCTRL_EXYNOS_ARM
+          scripts/config --enable CONFIG_SERIAL_SAMSUNG
+          scripts/config --enable CONFIG_SERIAL_SAMSUNG_CONSOLE
+          make olddefconfig
+          grep -E '^CONFIG_(SOC_EXYNOS3475|ARCH_EXYNOS3|ARCH_EXYNOS|COMMON_CLK_SAMSUNG|PINCTRL_EXYNOS|PINCTRL_EXYNOS_ARM|SERIAL_SAMSUNG|SERIAL_SAMSUNG_CONSOLE)=' .config | tee "$GITHUB_WORKSPACE/phase8-config.txt"
+          test "$(grep -c '^CONFIG_SOC_EXYNOS3475=y$' .config)" -eq 1
+          test "$(grep -c '^CONFIG_PINCTRL_EXYNOS_ARM=y$' .config)" -eq 1
+          test "$(grep -c '^CONFIG_SERIAL_SAMSUNG=y$' .config)" -eq 1
+
+      - name: Compile Exynos3475 machine, pinctrl, and board DT
+        working-directory: source/linux
+        run: |
+          set -euo pipefail
+          export ARCH=arm
+          export CROSS_COMPILE="$GITHUB_WORKSPACE/.toolchain/arm-eabi-4.9/bin/arm-eabi-"
+          export KBUILD_BUILD_USER=phase8
+          export KBUILD_BUILD_HOST=runner
+          make -j"$(nproc)" arch/arm/mach-exynos/exynos.o
+          make -j"$(nproc)" drivers/pinctrl/samsung/pinctrl-exynos3475.o
+          make -j"$(nproc)" dtbs
+          test -s drivers/pinctrl/samsung/pinctrl-exynos3475.o
+          test -s arch/arm/boot/dts/exynos3475-universal3475.dtb
+          dtc -I dtb -O dts arch/arm/boot/dts/exynos3475-universal3475.dtb \
+            > "$GITHUB_WORKSPACE/phase8-expanded.dts"
+          grep -q 'samsung,exynos3475' "$GITHUB_WORKSPACE/phase8-expanded.dts"
+          grep -q 'samsung,exynos3475-pinctrl' "$GITHUB_WORKSPACE/phase8-expanded.dts"
+          grep -q 'uart@13800000' "$GITHUB_WORKSPACE/phase8-expanded.dts"
+          echo PHASE8_MACHINE_PINCTRL_DT_COMPILE_PASS
+
+      - name: Upload Phase 8 evidence
+        if: always()
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: phase8-exynos3475-early-board-evidence
+          path: |
+            ${{ github.workspace }}/phase8-overlay.txt
+            ${{ github.workspace }}/phase8-config.txt
+            ${{ github.workspace }}/phase8-expanded.dts
+            source/linux/arch/arm/boot/dts/exynos3475-universal3475.dtb
+            source/linux/drivers/pinctrl/samsung/pinctrl-exynos3475.o
+            source/linux/arch/arm/mach-exynos/exynos.o
+          if-no-files-found: warn
+          retention-days: 14

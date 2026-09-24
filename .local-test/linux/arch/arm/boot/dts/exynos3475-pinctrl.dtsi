@@ -1,0 +1,228 @@
+/*
+ * Exynos3475 pinctrl bindings used by the Linux 4.14 Samsung pinctrl
+ * driver.  The layout is taken from the FY universal3475 donor tree.
+ */
+
+#include <dt-bindings/interrupt-controller/arm-gic.h>
+#include <dt-bindings/interrupt-controller/irq.h>
+
+/ {
+	pinctrl_0: pinctrl@139b0000 {
+		compatible = "samsung,exynos3475-pinctrl";
+		reg = <0x139b0000 0x1000>;
+		interrupts = <0 0 0>, <0 1 0>, <0 2 0>, <0 3 0>,
+			     <0 4 0>, <0 5 0>, <0 6 0>, <0 7 0>,
+			     <0 8 0>, <0 9 0>, <0 10 0>, <0 11 0>,
+			     <0 12 0>, <0 13 0>, <0 14 0>, <0 15 0>;
+
+		gpa0: gpa0 {
+			gpio-controller;
+			#gpio-cells = <2>;
+			interrupt-controller;
+			#interrupt-cells = <3>;
+			interrupts = <0 0 0>, <0 1 0>, <0 2 0>, <0 3 0>,
+				     <0 4 0>, <0 5 0>, <0 6 0>, <0 7 0>;
+		};
+		gpa1: gpa1 {
+			gpio-controller;
+			#gpio-cells = <2>;
+			interrupt-controller;
+			#interrupt-cells = <3>;
+			interrupts = <0 8 0>, <0 9 0>, <0 10 0>, <0 11 0>,
+				     <0 12 0>, <0 13 0>, <0 14 0>, <0 15 0>;
+		};
+		gpq0: gpq0 {
+			gpio-controller;
+			#gpio-cells = <2>;
+		};
+		wakeup-interrupt-controller {
+			compatible = "samsung,exynos4210-wakeup-eint";
+			interrupt-parent = <&gic>;
+			interrupts = <0 16 0>;
+			samsung,eint-flt-conf;
+		};
+	};
+
+	pinctrl_1: pinctrl@148f0000 {
+		compatible = "samsung,exynos3475-pinctrl";
+		reg = <0x148f0000 0x1000>;
+		interrupts = <0 68 0>;
+		gpz0: gpz0 {
+			gpio-controller;
+			#gpio-cells = <2>;
+			interrupt-controller;
+			#interrupt-cells = <2>;
+		};
+		gpz1: gpz1 {
+			gpio-controller;
+			#gpio-cells = <2>;
+			interrupt-controller;
+			#interrupt-cells = <2>;
+		};
+	};
+
+	pinctrl_2: pinctrl@138e0000 {
+		compatible = "samsung,exynos3475-pinctrl";
+		reg = <0x138e0000 0x1000>;
+		interrupts = <0 438 0>;
+		gpc4: gpc4 {
+			gpio-controller;
+			#gpio-cells = <2>;
+			interrupt-controller;
+			#interrupt-cells = <2>;
+		};
+	};
+
+	pinctrl_3: pinctrl@13750000 {
+		compatible = "samsung,exynos3475-pinctrl";
+		reg = <0x13750000 0x1000>;
+		interrupts = <0 250 0>;
+		gpr0: gpr0 {
+			gpio-controller;
+			#gpio-cells = <2>;
+			interrupt-controller;
+			#interrupt-cells = <2>;
+		};
+		gpr1: gpr1 {
+			gpio-controller;
+			#gpio-cells = <2>;
+			interrupt-controller;
+			#interrupt-cells = <2>;
+		};
+		gpr2: gpr2 {
+			gpio-controller;
+			#gpio-cells = <2>;
+			interrupt-controller;
+			#interrupt-cells = <2>;
+		};
+		gpr3: gpr3 {
+			gpio-controller;
+			#gpio-cells = <2>;
+			interrupt-controller;
+			#interrupt-cells = <2>;
+		};
+		gpr4: gpr4 {
+			gpio-controller;
+			#gpio-cells = <2>;
+			interrupt-controller;
+			#interrupt-cells = <2>;
+		};
+	};
+
+	pinctrl_4: pinctrl@104e0000 {
+		compatible = "samsung,exynos3475-pinctrl";
+		reg = <0x104e0000 0x1000>;
+		interrupts = <0 385 0>;
+		gpm0: gpm0 {
+			gpio-controller;
+			#gpio-cells = <2>;
+			interrupt-controller;
+			#interrupt-cells = <2>;
+		};
+	};
+
+	pinctrl_5: pinctrl@138c0000 {
+		compatible = "samsung,exynos3475-pinctrl";
+		reg = <0x138c0000 0x1000>;
+		interrupts = <0 115 0>;
+		gpc2: gpc2 {
+			gpio-controller;
+			#gpio-cells = <2>;
+			interrupt-controller;
+			#interrupt-cells = <2>;
+		};
+	};
+
+	pinctrl_6: pinctrl@139c0000 {
+		compatible = "samsung,exynos3475-pinctrl";
+		reg = <0x139c0000 0x1000>;
+		interrupts = <0 440 0>;
+		gpb0: gpb0 {
+			gpio-controller;
+			#gpio-cells = <2>;
+			interrupt-controller;
+			#interrupt-cells = <2>;
+		};
+		gpb1: gpb1 {
+			gpio-controller;
+			#gpio-cells = <2>;
+			interrupt-controller;
+			#interrupt-cells = <2>;
+		};
+		gpc0: gpc0 {
+			gpio-controller;
+			#gpio-cells = <2>;
+			interrupt-controller;
+			#interrupt-cells = <2>;
+		};
+		gpc1: gpc1 {
+			gpio-controller;
+			#gpio-cells = <2>;
+			interrupt-controller;
+			#interrupt-cells = <2>;
+		};
+		gpd0: gpd0 {
+			gpio-controller;
+			#gpio-cells = <2>;
+			interrupt-controller;
+			#interrupt-cells = <2>;
+		};
+		gpd1: gpd1 {
+			gpio-controller;
+			#gpio-cells = <2>;
+			interrupt-controller;
+			#interrupt-cells = <2>;
+		};
+		gpd2: gpd2 {
+			gpio-controller;
+			#gpio-cells = <2>;
+			interrupt-controller;
+			#interrupt-cells = <2>;
+		};
+		gpe0: gpe0 {
+			gpio-controller;
+			#gpio-cells = <2>;
+			interrupt-controller;
+			#interrupt-cells = <2>;
+		};
+		gpf0: gpf0 {
+			gpio-controller;
+			#gpio-cells = <2>;
+			interrupt-controller;
+			#interrupt-cells = <2>;
+		};
+		gpf1: gpf1 {
+			gpio-controller;
+			#gpio-cells = <2>;
+			interrupt-controller;
+			#interrupt-cells = <2>;
+		};
+		uart0_bus: uart0-bus {
+			samsung,pins = "gpb0-3", "gpb0-2", "gpb0-1", "gpb0-0";
+			samsung,pin-function = <2>;
+			samsung,pin-pud = <0>;
+		};
+		uart1_bus: uart1-bus {
+			samsung,pins = "gpb0-7", "gpb0-6", "gpb0-5", "gpb0-4";
+			samsung,pin-function = <2>;
+			samsung,pin-pud = <0>;
+		};
+		uart2_bus: uart2-bus {
+			samsung,pins = "gpb1-1", "gpb1-0";
+			samsung,pin-function = <2>;
+			samsung,pin-pud = <0>;
+		};
+	};
+
+	pinctrl_7: pinctrl@138d0000 {
+		compatible = "samsung,exynos3475-pinctrl";
+		reg = <0x138d0000 0x1000>;
+		interrupts = <0 116 0>;
+		gpc3: gpc3 {
+			gpio-controller;
+			#gpio-cells = <2>;
+			interrupt-controller;
+			#interrupt-cells = <2>;
+		};
+	};
+};

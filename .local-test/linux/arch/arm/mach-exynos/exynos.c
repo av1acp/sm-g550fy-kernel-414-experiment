@@ -24,6 +24,7 @@
 #include <asm/mach/map.h>
 
 #include <mach/map.h>
+#include <mach/regs-clock-exynos3475.h>
 #include <plat/cpu.h>
 
 #include "common.h"
@@ -34,6 +35,80 @@ static struct map_desc exynos4_iodesc[] __initdata = {
 		.pfn		= __phys_to_pfn(EXYNOS4_PA_COREPERI),
 		.length		= SZ_8K,
 		.type		= MT_DEVICE,
+	},
+};
+
+static struct map_desc exynos3475_iodesc[] __initdata = {
+	{
+		.virtual = (unsigned long)EXYNOS3475_VA_CMU_TOP,
+		.pfn = __phys_to_pfn(EXYNOS3475_PA_CMU_TOP),
+		.length = SZ_4K,
+		.type = MT_DEVICE,
+	}, {
+		.virtual = (unsigned long)EXYNOS3475_VA_CMU_MIF,
+		.pfn = __phys_to_pfn(EXYNOS3475_PA_CMU_MIF),
+		.length = SZ_8K,
+		.type = MT_DEVICE,
+	}, {
+		.virtual = (unsigned long)EXYNOS3475_VA_CMU_CPU,
+		.pfn = __phys_to_pfn(EXYNOS3475_PA_CMU_CPU),
+		.length = SZ_8K,
+		.type = MT_DEVICE,
+	}, {
+		.virtual = (unsigned long)EXYNOS3475_VA_CMU_IMEM,
+		.pfn = __phys_to_pfn(EXYNOS3475_PA_CMU_IMEM),
+		.length = SZ_4K,
+		.type = MT_DEVICE,
+	}, {
+		.virtual = (unsigned long)EXYNOS3475_VA_CMU_G3D,
+		.pfn = __phys_to_pfn(EXYNOS3475_PA_CMU_G3D),
+		.length = SZ_4K,
+		.type = MT_DEVICE,
+	}, {
+		.virtual = (unsigned long)EXYNOS3475_VA_CMU_BUS0,
+		.pfn = __phys_to_pfn(EXYNOS3475_PA_CMU_BUS0),
+		.length = SZ_4K,
+		.type = MT_DEVICE,
+	}, {
+		.virtual = (unsigned long)EXYNOS3475_VA_CMU_MFCMSCL,
+		.pfn = __phys_to_pfn(EXYNOS3475_PA_CMU_MFCMSCL),
+		.length = SZ_4K,
+		.type = MT_DEVICE,
+	}, {
+		.virtual = (unsigned long)EXYNOS3475_VA_CMU_BUS2,
+		.pfn = __phys_to_pfn(EXYNOS3475_PA_CMU_BUS2),
+		.length = SZ_4K,
+		.type = MT_DEVICE,
+	}, {
+		.virtual = (unsigned long)EXYNOS3475_VA_CMU_FSYS,
+		.pfn = __phys_to_pfn(EXYNOS3475_PA_CMU_FSYS),
+		.length = SZ_4K,
+		.type = MT_DEVICE,
+	}, {
+		.virtual = (unsigned long)EXYNOS3475_VA_CMU_PERI,
+		.pfn = __phys_to_pfn(EXYNOS3475_PA_CMU_PERI),
+		.length = SZ_4K,
+		.type = MT_DEVICE,
+	}, {
+		.virtual = (unsigned long)EXYNOS3475_VA_CMU_ISP,
+		.pfn = __phys_to_pfn(EXYNOS3475_PA_CMU_ISP),
+		.length = SZ_4K,
+		.type = MT_DEVICE,
+	}, {
+		.virtual = (unsigned long)EXYNOS3475_VA_CMU_DISPAUD,
+		.pfn = __phys_to_pfn(EXYNOS3475_PA_CMU_DISPAUD),
+		.length = SZ_4K,
+		.type = MT_DEVICE,
+	}, {
+		.virtual = (unsigned long)EXYNOS3475_VA_PMU,
+		.pfn = __phys_to_pfn(EXYNOS3475_PA_PMU),
+		.length = SZ_64K,
+		.type = MT_DEVICE,
+	}, {
+		.virtual = (unsigned long)EXYNOS3475_VA_SYSRAM_NS,
+		.pfn = __phys_to_pfn(EXYNOS3475_PA_SYSRAM_NS),
+		.length = SZ_4K,
+		.type = MT_DEVICE,
 	},
 };
 
@@ -110,6 +185,11 @@ static void __init exynos_map_io(void)
 		iotable_init(exynos4_iodesc, ARRAY_SIZE(exynos4_iodesc));
 }
 
+static void __init exynos3475_map_io(void)
+{
+	iotable_init(exynos3475_iodesc, ARRAY_SIZE(exynos3475_iodesc));
+}
+
 static void __init exynos_init_io(void)
 {
 	debug_ll_io_init();
@@ -119,7 +199,10 @@ static void __init exynos_init_io(void)
 	/* detect cpu id and rev. */
 	s5p_init_cpu(S5P_VA_CHIPID);
 
-	exynos_map_io();
+	if (of_machine_is_compatible("samsung,exynos3475"))
+		exynos3475_map_io();
+	else
+		exynos_map_io();
 }
 
 /*
@@ -206,6 +289,7 @@ static void __init exynos_dt_machine_init(void)
 static char const *const exynos_dt_compat[] __initconst = {
 	"samsung,exynos3",
 	"samsung,exynos3250",
+	"samsung,exynos3475",
 	"samsung,exynos4",
 	"samsung,exynos4210",
 	"samsung,exynos4212",

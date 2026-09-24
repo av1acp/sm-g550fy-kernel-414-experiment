@@ -152,6 +152,8 @@ dtb-$(CONFIG_ARCH_EXYNOS3) += \
 	exynos3250-artik5-eval.dtb \
 	exynos3250-monk.dtb \
 	exynos3250-rinato.dtb
+dtb-$(CONFIG_SOC_EXYNOS3475) += \
+	exynos3475-universal3475.dtb
 dtb-$(CONFIG_ARCH_EXYNOS4) += \
 	exynos4210-origen.dtb \
 	exynos4210-smdkv310.dtb \
