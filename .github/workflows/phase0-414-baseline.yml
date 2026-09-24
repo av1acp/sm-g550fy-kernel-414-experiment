@@ -1,4 +1,4 @@
-name: Phase0 - Linux 4.14 baseline build test (no flash)
+name: Phase0 - Linux 4.14 baseline with era-matched ARM32 toolchain
 
 on:
   workflow_dispatch:
@@ -11,10 +11,17 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
-      - name: Checkout experiment repo
+      - name: Checkout experiment repository
         uses: actions/checkout@v7.0.1
 
-      - name: Fetch Linux 4.14 source
+      - name: Install host build packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            bc bison flex build-essential ca-certificates ccache git \
+            libncurses-dev libssl-dev xz-utils
+
+      - name: Fetch Linux 4.14 stable source
         run: |
           set -euo pipefail
           mkdir -p source
@@ -23,95 +30,83 @@ jobs:
             https://cdn.kernel.org/pub/linux/kernel/v4.x/linux-4.14.tar.xz
           tar -xf linux-4.14.tar.xz
           mv linux-4.14 linux
-          echo "version:"
           head -5 linux/Makefile
 
-      - name: Install ARM toolchain
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            bc bison flex libssl-dev libncurses-dev \
-            build-essential gcc-arm-linux-gnueabi gcc-arm-linux-gnueabihf \
-            xz-utils ccache
+      - name: Restore cached ARM32 toolchain
+        id: toolchain-cache
+        uses: actions/cache@v6.1.0
+        with:
+          path: .toolchain/arm-eabi-4.9
+          key: burstlam-arm-eabi-4.9-v1
 
-      - name: Verify toolchain is ARM32
+      - name: Fetch era-matched ARM32 toolchain
+        if: ${{ steps.toolchain-cache.outputs.cache-hit != 'true' }}
         run: |
           set -euo pipefail
-          arm-linux-gnueabi-gcc --version | head -1
-          arm-linux-gnueabi-gcc -dumpmachine
-          arm-linux-gnueabi-gcc -dumpmachine | grep -q 'arm-' \
-            || (echo "FATAL: toolchain is not 32-bit ARM" && exit 1)
+          TC="$GITHUB_WORKSPACE/.toolchain/arm-eabi-4.9"
+          mkdir -p "$(dirname "$TC")"
+          rm -rf "$TC"
+          git clone --quiet --depth 1 \
+            https://github.com/burstlam/arm-eabi-4.9.git "$TC"
 
-      - name: Phase0 baseline compile (generic ARMv7, no device)
+      - name: Verify cross toolchain
+        run: |
+          set -euo pipefail
+          TC="$GITHUB_WORKSPACE/.toolchain/arm-eabi-4.9"
+          for t in arm-eabi-gcc arm-eabi-ld arm-eabi-as arm-eabi-objcopy; do
+            test -x "$TC/bin/$t" || { echo "MISSING $t"; exit 1; }
+            echo "OK $t"
+          done
+          "$TC/bin/arm-eabi-gcc" --version | head -1
+          "$TC/bin/arm-eabi-gcc" -dumpmachine
+          file "$TC/bin/arm-eabi-gcc"
+          file "$TC/bin/arm-eabi-as" 2>/dev/null || true
+
+      - name: Compile Linux 4.14 ARMv7 zImage
         working-directory: source/linux
         run: |
           set -euo pipefail
+          TC="$GITHUB_WORKSPACE/.toolchain/arm-eabi-4.9"
           export ARCH=arm
-          export CROSS_COMPILE=arm-linux-gnueabi-
-          # Exynos3475 CPU = ARM Cortex-A7 (ARMv7-A). The distro
-          # arm-linux-gnueabihf GCC defaults to armv5/armv6 ISA without
-          # an explicit CPU, so ARMv7-only instructions (cpsid i/cpsie i,
-          # dsb, ishst) are rejected. multi_v7_defconfig's flags need the
-          # processor override on this old (4.14) tree.
-          # 4.14 + gcc13 armhf cc-option bug (Arnd Bergmann stable#190):
-          # -mfloat-abi=hard default makes -march=armv7-a fail before
-          # -msoft-float is added, falling back to armv5t -> cpsid/cpsie
-          # assembler errors. Soft-float toolchain (gnueabi) avoids it.
-          # CONFIG_CPU_32v7=y from multi_v7_defconfig supplies
-          # -march=armv7-a correctly, so no extra KCFLAGS needed.
+          export CROSS_COMPILE="$TC/bin/arm-eabi-"
           export KBUILD_BUILD_USER=phase0
           export KBUILD_BUILD_HOST=runner
-          # gcc >= 10 defaults to -fno-common; old trees' shipped dtc
-          # parser+lexer both define yylloc -> link error. Make the parser
-          # copy extern (same fix as our 3.10 build script).
-          # 4.14 parser defines yylloc as "YYLTYPE yylloc" (no semicolon,
-          # followed by a brace init) around line 1205. The lexer also
-          # defines it -> duplicate under -fno-common. Make the parser copy
-          # extern, keeping its initializer semantics.
+
+          # gcc 4.9 does not default to -fno-common, so the old dtc's two
+          # yylloc definitions link. Keep the fix guarded for reproducibility.
           if grep -q '^YYLTYPE yylloc$' scripts/dtc/dtc-parser.tab.c_shipped; then
             sed -i '0,/^YYLTYPE yylloc$/s//extern YYLTYPE yylloc/' \
               scripts/dtc/dtc-parser.tab.c_shipped
-            echo "applied dtc yylloc extern fix (4.14 parser format)"
-          elif grep -q '^YYLTYPE yylloc;$' scripts/dtc/dtc-parser.tab.c_shipped; then
-            sed -i 's/^YYLTYPE yylloc;$/extern YYLTYPE yylloc;/' \
-              scripts/dtc/dtc-parser.tab.c_shipped
-            echo "applied dtc yylloc extern fix (semicolon format)"
-          else
-            echo "WARNING: no parser yylloc definition matched — inspect manually"
+            echo "patched dtc parser yylloc as extern"
           fi
-          # gcc >= 10 defaults to -fno-common; old dtc ships both a
-          # parser and lexer copy of YYLTYPE yylloc -> duplicate symbol at
-          # link. Make the parser copy extern (same fix used in the 3.10 build).
-          if grep -q '^YYLTYPE yylloc;$' scripts/dtc/dtc-parser.tab.c_shipped; then
-            sed -i 's/^YYLTYPE yylloc;$/extern YYLTYPE yylloc;/' \
-              scripts/dtc/dtc-parser.tab.c_shipped
-            echo "applied dtc yylloc extern fix"
-          fi
+
           make multi_v7_defconfig
           scripts/config --set-str LOCALVERSION "-port-exp-phase0" || true
           make olddefconfig
           make -j"$(nproc)" zImage
-          ls -la arch/arm/boot/zImage
+          test -s arch/arm/boot/zImage
           file arch/arm/boot/zImage
           cat include/config/kernel.release
+          ls -lh arch/arm/boot/zImage
 
-      - name: Verify source facts (exynos3475 absent upstream)
+      - name: Verify upstream has no Exynos3475 board support
         run: |
           set -euo pipefail
-          echo "== searching upstream 4.14 for any 3475/gsi support =="
-          FOUND=$(grep -rIl --include='*.[chd]' -e '3475' -e 'universal3475' \
-            source/linux/arch/arm source/linux/drivers 2>/dev/null | head -5 || true)
+          echo "Searching Linux 4.14 upstream for Exynos3475 board support"
+          FOUND=$(grep -rIl --include='*.[chd]' --include='Makefile*' \
+            -e '3475' -e 'universal3475' \
+            source/linux/arch/arm source/linux/drivers 2>/dev/null | head -10 || true)
           if [ -n "$FOUND" ]; then
-            echo "UNEXPECTED: 3475 references found upstream:"
+            echo "UNEXPECTED upstream references:"
             echo "$FOUND"
-          else
-            echo "CONFIRMED: no Exynos3475 board support in Linux 4.14 upstream"
+            exit 1
           fi
+          echo "CONFIRMED: Exynos3475 is Samsung-downstream only; no upstream 4.14 support"
 
-      - name: Upload phase0 zImage (reference only, do not flash)
+      - name: Upload phase0 reference zImage - do not flash
         uses: actions/upload-artifact@v7.0.1
         with:
-          name: linux-4.14-phase0-baseline-zImage
+          name: linux-4.14-phase0-arm-eabi-4.9-zImage
           path: source/linux/arch/arm/boot/zImage
           if-no-files-found: error
           retention-days: 7
