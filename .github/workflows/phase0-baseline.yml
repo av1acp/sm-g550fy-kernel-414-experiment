@@ -1,4 +1,4 @@
-name: Phase0 - Linux 4.5 baseline build test (no flash)
+name: Phase0 - Linux 4.14 baseline build test (no flash)
 
 on:
   workflow_dispatch:
@@ -14,15 +14,15 @@ jobs:
       - name: Checkout experiment repo
         uses: actions/checkout@v7.0.1
 
-      - name: Fetch Linux 4.5 source
+      - name: Fetch Linux 4.14 source
         run: |
           set -euo pipefail
           mkdir -p source
           cd source
-          curl -fSL --retry 3 -o linux-4.5.tar.xz \
-            https://cdn.kernel.org/pub/linux/kernel/v4.x/linux-4.5.tar.xz
-          tar -xf linux-4.5.tar.xz
-          mv linux-4.5 linux
+          curl -fSL --retry 3 -o linux-4.14.tar.xz \
+            https://cdn.kernel.org/pub/linux/kernel/v4.x/linux-4.14.tar.xz
+          tar -xf linux-4.14.tar.xz
+          mv linux-4.14 linux
           echo "version:"
           head -5 linux/Makefile
 
@@ -69,20 +69,20 @@ jobs:
       - name: Verify source facts (exynos3475 absent upstream)
         run: |
           set -euo pipefail
-          echo "== searching upstream 4.5 for any 3475/gsi support =="
+          echo "== searching upstream 4.14 for any 3475/gsi support =="
           FOUND=$(grep -rIl --include='*.[chd]' -e '3475' -e 'universal3475' \
             source/linux/arch/arm source/linux/drivers 2>/dev/null | head -5 || true)
           if [ -n "$FOUND" ]; then
             echo "UNEXPECTED: 3475 references found upstream:"
             echo "$FOUND"
           else
-            echo "CONFIRMED: no Exynos3475 board support in Linux 4.5 upstream"
+            echo "CONFIRMED: no Exynos3475 board support in Linux 4.14 upstream"
           fi
 
       - name: Upload phase0 zImage (reference only, do not flash)
         uses: actions/upload-artifact@v7.0.1
         with:
-          name: linux-4.5-phase0-baseline-zImage
+          name: linux-4.14-phase0-baseline-zImage
           path: source/linux/arch/arm/boot/zImage
           if-no-files-found: error
           retention-days: 7
