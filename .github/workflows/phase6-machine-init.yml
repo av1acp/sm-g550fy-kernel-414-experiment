@@ -1,0 +1,91 @@
+name: Phase6 - Exynos3475 machine init + clock table (compile only)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  phase6:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Checkout experiment repository
+        uses: actions/checkout@v7.0.1
+      - name: Install packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends bc bison flex build-essential ca-certificates ccache git libncurses-dev libssl-dev xz-utils
+      - name: Restore ARM32 toolchain
+        id: tc
+        uses: actions/cache@v6.1.0
+        with:
+          path: .toolchain/arm-eabi-4.9
+          key: burstlam-arm-eabi-4.9-v1
+      - name: Fetch toolchain if needed
+        if: ${{ steps.tc.outputs.cache-hit != 'true' }}
+        run: |
+          set -euo pipefail
+          TC="$GITHUB_WORKSPACE/.toolchain/arm-eabi-4.9"
+          mkdir -p "$(dirname "$TC")"
+          rm -rf "$TC"
+          git clone --quiet --depth 1 https://github.com/burstlam/arm-eabi-4.9.git "$TC"
+      - name: Fetch Linux 4.14 + donor
+        run: |
+          set -euo pipefail
+          mkdir -p source && cd source
+          curl -fSL --retry 3 -o l.tar.xz https://cdn.kernel.org/pub/linux/kernel/v4.x/linux-4.14.tar.xz
+          tar -xf l.tar.xz && mv linux-4.14 linux
+          git clone --quiet --depth 1 --branch cm-14.1 https://github.com/Exynos3475/android_kernel_samsung_exynos3475.git donor
+      - name: Inventory donor machine init and clock data
+        run: |
+          cd source
+          {
+            echo '=== DONOR MACHINE INIT (3.10) ==='
+            find donor/arch/arm/mach-exynos -maxdepth 2 -type f -iname '*3475*' | sort
+            echo
+            echo '=== DONOR MACH DIR SIZE ==='
+            du -sh donor/arch/arm/mach-exynos
+            find donor/arch/arm/mach-exynos -type f | wc -l
+            echo
+            echo '=== DONOR CLOCK INIT ==='
+            grep -rn 'exynos3475' donor/arch/arm/mach-exynos donor/drivers/clocks 2>/dev/null | head -40 || true
+            echo
+            echo '=== 4.14 MACH EXYNOS ==='
+            ls linux/arch/arm/mach-exynos/
+          } | tee "$GITHUB_WORKSPACE/phase6-inventory.txt"
+      - name: Report 4.14 clock registration point
+        run: |
+          cd source/linux
+          {
+            echo '=== 4.14 clk-exynos4.c SoC ID table ==='
+            grep -n -E 'exynos[0-9]+_clk_soc_ids|of_device_id|EXYNOS.*CLK' drivers/clk/samsung/clk-exynos4.c | head -30 || true
+            echo
+            echo '=== 4.14 mach-exynos Kconfig board entries ==='
+            grep -n -E 'EXYNOS.*4|EXYNOS4|COMPILE.*exynos' arch/arm/mach-exynos/Kconfig | head -30 || true
+            echo
+            echo '=== 4.14 ARCH_EXYNOS config ==='
+            grep -n -A5 'config ARCH_EXYNOS4' arch/arm/Kconfig arch/arm/Kconfig.debug 2>/dev/null || true
+          } | tee "$GITHUB_WORKSPACE/phase6-registration-points.txt"
+      - name: Compile baseline (gate still green)
+        working-directory: source/linux
+        run: |
+          set -euo pipefail
+          TC="$GITHUB_WORKSPACE/.toolchain/arm-eabi-4.9"
+          export ARCH=arm CROSS_COMPILE="$TC/bin/arm-eabi-" KBUILD_BUILD_USER=phase6 KBUILD_BUILD_HOST=runner
+          if grep -q '^YYLTYPE yylloc$' scripts/dtc/dtc-parser.tab.c_shipped; then sed -i '0,/^YYLTYPE yylloc$/s//extern YYLTYPE yylloc/' scripts/dtc/dtc-parser.tab.c_shipped; fi
+          make exynos_defconfig
+          make olddefconfig
+          make -j"$(nproc)" zImage dtbs
+          file arch/arm/boot/zImage
+          cat include/config/kernel.release
+          echo PHASE6_BASELINE_PASS
+      - name: Upload inventory
+        if: always()
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: phase6-machine-init-inventory
+          path: ${{ github.workspace }}/phase6-*.txt
+          if-no-files-found: warn
+          retention-days: 14
