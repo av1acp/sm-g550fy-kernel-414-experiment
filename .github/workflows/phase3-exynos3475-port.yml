@@ -1,0 +1,234 @@
+name: Phase3 - Exynos3475 real board port attempt (compile only)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  phase3:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Checkout experiment repository
+        uses: actions/checkout@v7.0.1
+
+      - name: Install build packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            bc bison flex build-essential ca-certificates ccache git \
+            libncurses-dev libssl-dev xz-utils
+
+      - name: Restore cached ARM32 toolchain
+        id: toolchain-cache
+        uses: actions/cache@v6.1.0
+        with:
+          path: .toolchain/arm-eabi-4.9
+          key: burstlam-arm-eabi-4.9-v1
+
+      - name: Fetch era-matched ARM32 toolchain
+        if: ${{ steps.toolchain-cache.outputs.cache-hit != 'true' }}
+        run: |
+          set -euo pipefail
+          TC="$GITHUB_WORKSPACE/.toolchain/arm-eabi-4.9"
+          mkdir -p "$(dirname "$TC")"
+          rm -rf "$TC"
+          git clone --quiet --depth 1 https://github.com/burstlam/arm-eabi-4.9.git "$TC"
+          "$TC/bin/arm-eabi-gcc" --version | head -1
+
+      - name: Fetch Linux 4.14 and FY 3.10 donor tree
+        run: |
+          set -euo pipefail
+          mkdir -p source
+          cd source
+          curl -fSL --retry 3 -o linux-4.14.tar.xz \
+            https://cdn.kernel.org/pub/linux/kernel/v4.x/linux-4.14.tar.xz
+          tar -xf linux-4.14.tar.xz
+          mv linux-4.14 linux
+          git clone --quiet --depth 1 --branch cm-14.1 \
+            https://github.com/Exynos3475/android_kernel_samsung_exynos3475.git donor
+          echo "4.14 files: $(find linux -type f | wc -l)"
+          echo "donor files: $(find donor -type f | wc -l)"
+
+      - name: Inventory Exynos3475 donor surface
+        run: |
+          set -uo pipefail
+          cd source
+          OUT="$GITHUB_WORKSPACE/phase3-inventory.txt"
+          {
+            echo "=== DONOR Exynos3475-specific paths ==="
+            find donor -type f \( -iname '*exynos3475*' -o -iname '*universal3475*' \) \
+              | sort
+            echo
+            echo "=== DONOR mach-exynos size ==="
+            find donor/arch/arm/mach-exynos -type f | wc -l
+            du -sh donor/arch/arm/mach-exynos
+            echo
+            echo "=== 4.14 Exynos support surface ==="
+            for d in drivers/clocksource drivers/pinctrl drivers/soc/samsung \
+                     drivers/thermal drivers/watchdog drivers/mmc/host \
+                     drivers/media/platform/samsung arch/arm/mach-exynos; do
+              if [ -d "linux/$d" ]; then
+                echo "  4.14 HAS $d ($(find linux/$d -type f | wc -l) files)"
+              else
+                echo "  4.14 MISSING $d"
+              fi
+            done
+            echo
+            echo "=== 4.14 exynos4 platform support ==="
+            find linux/arch/arm -maxdepth 1 -iname '*exynos*' -printf '%f\n' 2>/dev/null | sort
+            echo
+            echo "=== donor early-boot-relevant drivers ==="
+            for f in drivers/clocksource/exynos_mct.c \
+                     drivers/pinctrl/pinctrl-exynos.c \
+                     drivers/serial/8250_dw.c \
+                     drivers/thermal/samsung_thermal.c \
+                     drivers/watchdog/samsung_wdt.c; do
+              if [ -f "donor/$f" ]; then
+                printf "  %-48s donor=%s lines  linux414=%s\n" "$f" \
+                  "$(wc -l < donor/$f)" \
+                  "$( [ -f linux/$f ] && wc -l < linux/$f || echo absent)"
+              else
+                printf "  %-48s donor=ABSENT\n" "$f"
+              fi
+            done
+          } | tee "$OUT"
+          echo "INVENTORY WRITTEN: $OUT"
+
+      - name: Copy donor early drivers and board files into 4.14
+        run: |
+          set -uo pipefail
+          cd source
+          LOG="$GITHUB_WORKSPACE/phase3-copy.txt"
+          {
+            echo "=== COPY LOG (3.10 -> 4.14, mechanical attempt) ==="
+            copy_one() {
+              src="$1"; dst="$2"
+              if [ -f "$src" ]; then
+                mkdir -p "$(dirname "$dst")"
+                cp "$src" "$dst" && echo "  COPIED  $src -> $dst" \
+                  || echo "  FAILED   $src -> $dst"
+              else
+                echo "  SKIP     $src (donor missing)"
+              fi
+            }
+            # clocksource (Exynos MCT timer) - 3.10 driver, needs 4.14 API port
+            copy_one donor/drivers/clocksource/exynos_mct.c \
+                     linux/drivers/clocksource/exynos_mct.c
+            # pinctrl core Exynos family (upstream 4.14 has pinctrl-exynos too;
+            # keep donor reference under ported/ only, not overwriting upstream)
+            mkdir -p ported/driver-refs
+            for f in drivers/pinctrl/pinctrl-exynos.c \
+                     drivers/pinctrl/pinctrl-exynos.h \
+                     drivers/serial/8250_dw.c \
+                     drivers/watchdog/samsung_wdt.c \
+                     drivers/thermal/samsung_thermal.c; do
+              [ -f "donor/$f" ] && cp "donor/$f" ported/driver-refs/ && echo "  REF $f"
+            done
+            # board headers + DT bindings are the critical missing pieces
+            copy_one donor/arch/arm/mach-exynos/include/mach/regs-clock-exynos3475.h \
+                     linux/arch/arm/mach-exynos/include/mach/regs-clock-exynos3475.h
+            copy_one donor/include/dt-bindings/clock/exynos3475.h \
+                     linux/include/dt-bindings/clock/exynos3475.h
+            # all donor dts for 3475 family
+            mkdir -p ported/dts
+            find donor/arch/arm/boot/dts -type f -iname '*exynos3475*' \
+              -exec cp {} ported/dts/ \; 2>/dev/null
+            echo "  DTS refs copied: $(find ported/dts -type f | wc -l)"
+            echo "=== board refs total ==="
+            find ported -type f | wc -l
+          } | tee "$LOG"
+
+      - name: Configure 4.14 for Exynos4 and compile
+        working-directory: source/linux
+        run: |
+          set -uo pipefail
+          TC="$GITHUB_WORKSPACE/.toolchain/arm-eabi-4.9"
+          export ARCH=arm
+          export CROSS_COMPILE="$TC/bin/arm-eabi-"
+          export KBUILD_BUILD_USER=phase3
+          export KBUILD_BUILD_HOST=runner
+          if grep -q '^YYLTYPE yylloc$' scripts/dtc/dtc-parser.tab.c_shipped; then
+            sed -i '0,/^YYLTYPE yylloc$/s//extern YYLTYPE yylloc/' \
+              scripts/dtc/dtc-parser.tab.c_shipped
+          fi
+          make exynos4_defconfig
+          # enable the pieces that exist in 4.14 upstream
+          scripts/config --enable CONFIG_PINCTRL_EXYNOS || true
+          scripts/config --enable CONFIG_CLOCK_EXYNOS4 || true
+          scripts/config --enable CONFIG_SERIAL_8250_DW || true
+          scripts/config --enable CONFIG_SERIAL_AMBA_PL011 || true
+          scripts/config --enable CONFIG_MMC_DW || true
+          scripts/config --enable CONFIG_MMC_DW_MMC || true
+          make olddefconfig
+          echo "=== selected exynos options ==="
+          grep -E 'CONFIG_(ARCH_EXYNOS|PINCTRL_EXYNOS|CLOCK_EXYNOS4|SERIAL_8250_DW|MMC_DW)' .config || true
+          set +e
+          make -k -j"$(nproc)" zImage dtbs > "$GITHUB_WORKSPACE/phase3-build.log" 2>&1
+          RC=$?
+          set -e
+          echo "MAKE_RC=$RC"
+          echo "=== error summary ==="
+          grep -c 'error:' "$GITHUB_WORKSPACE/phase3-build.log" || true
+          grep 'error:' "$GITHUB_WORKSPACE/phase3-build.log" | head -40 || true
+          if [ "$RC" -eq 0 ] && [ -s arch/arm/boot/zImage ]; then
+            file arch/arm/boot/zImage
+            cat include/config/kernel.release
+            echo "PHASE3_COMPILE_PASS"
+          else
+            echo "PHASE3_COMPILE_INCOMPLETE (expected: 3.10 drivers need API port)"
+            exit 0
+          fi
+
+      - name: Summarise what remains to port
+        run: |
+          set -uo pipefail
+          cd source
+          OUT="$GITHUB_WORKSPACE/phase3-port-todo.txt"
+          {
+            echo "=== PHASE3 PORT TODO (3.10 donor -> 4.14) ==="
+            echo
+            echo "1. BOARD INIT"
+            echo "   donor: arch/arm/mach-exynos/mach-exynos3475/*"
+            echo "   need : port board init + early console to 4.14 mach-exynos"
+            echo
+            echo "2. CLOCK"
+            echo "   donor: regs-clock-exynos3475.h + clk driver under mach-exynos"
+            echo "   need : convert to 4.14 Common Clock Framework driver"
+            echo
+            echo "3. PINCTRL"
+            echo "   donor: drivers/pinctrl/pinctrl-exynos.c"
+            echo "   4.14 has upstream version; diff required for 3475 pin groups"
+            echo
+            echo "4. UART/EARLY CONSOLE"
+            echo "   8250_dw exists upstream; needs 3475 clock/pinmux wiring"
+            echo
+            echo "5. TEE/MobiCore (Gatekeeper dependency)"
+            echo "   donor: drivers/misc/secure_ctrl/* + ess"
+            echo "   4.14: no equivalent; userspace will not boot without it"
+            echo
+            echo "6. DISPLAY DECON / MALI"
+            echo "   donor: drivers/video/exynos/decon_3475 + gpu/arm/t72x"
+            echo "   4.14: incompatible, full rewrite required"
+            echo
+            echo "7. CAMERA ISP (FIMC)"
+            echo "   donor: drivers/media/samsung"
+            echo "   4.14: vendor ABI changed, full rewrite required"
+          } | tee "$OUT"
+          cat "$OUT"
+
+      - name: Upload phase3 evidence
+        if: always()
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: phase3-exynos3475-port-evidence
+          path: |
+            ${{ github.workspace }}/phase3-inventory.txt
+            ${{ github.workspace }}/phase3-copy.txt
+            ${{ github.workspace }}/phase3-build.log
+            ${{ github.workspace }}/phase3-port-todo.txt
+            source/linux/arch/arm/boot/zImage
+          if-no-files-found: warn
+          retention-days: 14
