@@ -51,43 +51,41 @@ jobs:
 
       - name: Port exynos_mct clocksource to 4.14 API
         run: |
-          set -uo pipefail
           cd source/linux
           # 4.14 ALREADY has an exynos_mct driver. The donor copy from 3.10
           # uses the removed asm/sched_clock.h. We must NOT overwrite the
           # upstream 4.14 version: use upstream and only register it.
           echo "=== upstream 4.14 exynos_mct.c header check ==="
-          grep -n '#include' drivers/clocksource/exynos_mct.c | head -12
+          grep -n '#include' drivers/clocksource/exynos_mct.c 2>/dev/null | head -12 || true
           echo "=== diff donor vs upstream (API changes only) ==="
           diff -u ../donor/drivers/clocksource/exynos_mct.c \
-                 drivers/clocksource/exynos_mct.c | head -40 || true
+                 drivers/clocksource/exynos_mct.c 2>/dev/null | head -40 || true
           # no mechanical copy: upstream already carries Exynos MCT support.
 
       - name: Verify 4.14 Samsung pinctrl framework and locate Exynos3475 DT data
         run: |
-          set -uo pipefail
           cd source/linux
           DONOR=../donor
-          echo "=== 4.14 samsung pinctrl files (ALREADY present, do not copy donor over these) ==="
-          ls -la drivers/pinctrl/samsung/pinctrl-exynos*.c 2>/dev/null || true
-          echo
-          echo "=== 4.14 Kconfig symbols ==="
-          grep -n -E 'PINCTRL.*EXYNOS|EXYNOS.*PINCTRL' drivers/pinctrl/samsung/Kconfig || true
-          echo
-          echo "=== donor Exynos3475 DT sources (needed to extend 4.14 DT tables) ==="
-          for f in exynos3475-pinctrl.dtsi exynos3475-universal3475-pinctrl.dtsi \
-                   exynos3475.dtsi exynos3475-universal3475.dts; do
-            [ -f "$DONOR/arch/arm/boot/dts/$f" ] && echo "  donor DTS: $f" || true
-          done
-          find "$DONOR/arch/arm/boot/dts" -maxdepth 1 -iname '*3475*' | head -20
-          echo
-          echo "=== clock data available in 4.14 upstream? ==="
-          grep -n 'exynos3475' drivers/clk/samsung/clk-exynos4*.c 2>/dev/null | head -5 || echo "  no exynos3475 clock table in 4.14 upstream (must add)"
+          OUT="$GITHUB_WORKSPACE/phase4-pinctrl-inventory.txt"
+          {
+            echo "=== 4.14 samsung pinctrl files (ALREADY present) ==="
+            ls -la drivers/pinctrl/samsung/pinctrl-exynos*.c 2>/dev/null || echo "(none)"
+            echo
+            echo "=== 4.14 Kconfig symbols ==="
+            grep -n -E 'PINCTRL.*EXYNOS|EXYNOS.*PINCTRL' drivers/pinctrl/samsung/Kconfig 2>/dev/null || echo "(none)"
+            echo
+            echo "=== donor Exynos3475 DT sources ==="
+            find "$DONOR/arch/arm/boot/dts" -maxdepth 1 -iname '*3475*' 2>/dev/null | head -20 || echo "(none)"
+            echo
+            echo "=== Exynos3475 clock table in 4.14 upstream? ==="
+            grep -n 'exynos3475' drivers/clk/samsung/clk-exynos4*.c 2>/dev/null | head -5 || echo "(no exynos3475 clock table in 4.14 upstream; must add)"
+          } > "$OUT" 2>&1 || true
+          cat "$OUT"
+          echo "PINTCRL INVENTORY COMPLETE"
 
       - name: Compile with pinctrl+mct and report exact errors
         working-directory: source/linux
         run: |
-          set -uo pipefail
           TC="$GITHUB_WORKSPACE/.toolchain/arm-eabi-4.9"
           export ARCH=arm
           export CROSS_COMPILE="$TC/bin/arm-eabi-"
