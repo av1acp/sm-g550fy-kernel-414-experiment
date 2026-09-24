@@ -60,7 +60,6 @@ jobs:
           "$TC/bin/arm-eabi-gcc" --version | head -1
           "$TC/bin/arm-eabi-gcc" -dumpmachine
           file "$TC/bin/arm-eabi-gcc"
-          file "$TC/bin/arm-eabi-as" 2>/dev/null || true
 
       - name: Compile Linux 4.14 ARMv7 zImage
         working-directory: source/linux
@@ -71,15 +70,11 @@ jobs:
           export CROSS_COMPILE="$TC/bin/arm-eabi-"
           export KBUILD_BUILD_USER=phase0
           export KBUILD_BUILD_HOST=runner
-
-          # gcc 4.9 does not default to -fno-common, so the old dtc's two
-          # yylloc definitions link. Keep the fix guarded for reproducibility.
           if grep -q '^YYLTYPE yylloc$' scripts/dtc/dtc-parser.tab.c_shipped; then
             sed -i '0,/^YYLTYPE yylloc$/s//extern YYLTYPE yylloc/' \
               scripts/dtc/dtc-parser.tab.c_shipped
             echo "patched dtc parser yylloc as extern"
           fi
-
           make multi_v7_defconfig
           scripts/config --set-str LOCALVERSION "-port-exp-phase0" || true
           make olddefconfig
@@ -93,8 +88,9 @@ jobs:
         run: |
           set -euo pipefail
           echo "Searching Linux 4.14 upstream for Exynos3475 board support"
-          FOUND=$(grep -rIl --include='*.[chd]' --include='Makefile*' \
-            -e '3475' -e 'universal3475' \
+          # Word-boundary, case-insensitive: bare "3475" also matches
+          # unrelated hex constants (e.g. e4000_priv.h).
+          FOUND=$(grep -rIliw -e 'exynos3475' -e 'universal3475' \
             source/linux/arch/arm source/linux/drivers 2>/dev/null | head -10 || true)
           if [ -n "$FOUND" ]; then
             echo "UNEXPECTED upstream references:"
