@@ -59,7 +59,7 @@ jobs:
           echo "=== upstream 4.14 exynos_mct.c header check ==="
           grep -n '#include' drivers/clocksource/exynos_mct.c | head -12
           echo "=== diff donor vs upstream (API changes only) ==="
-          diff -u ../../donor/drivers/clocksource/exynos_mct.c \
+          diff -u ../donor/drivers/clocksource/exynos_mct.c \
                  drivers/clocksource/exynos_mct.c | head -40 || true
           # no mechanical copy: upstream already carries Exynos MCT support.
 
@@ -70,8 +70,14 @@ jobs:
           DONOR=../donor
           # 4.14 has no drivers/pinctrl/pinctrl-exynos.c: copy donor file
           # and record the 4.14 API gaps for the next step.
+          set +e
           cp "$DONOR/drivers/pinctrl/pinctrl-exynos.c" drivers/pinctrl/pinctrl-exynos.c
           cp "$DONOR/drivers/pinctrl/pinctrl-exynos.h" drivers/pinctrl/pinctrl-exynos.h
+          set -e
+          if [ ! -f drivers/pinctrl/pinctrl-exynos.c ]; then
+            echo "NOTE: donor pinctrl-exynos.c not found at expected path"
+            find "$DONOR" -name 'pinctrl-exynos*' -print | head -10
+          fi
           echo "=== 4.14 pinctrl core includes donor needs ==="
           grep -n '#include' drivers/pinctrl/pinctrl-exynos.c | head -20
           echo "=== likely API breaks (pinctrl_ops -> pinctrl_ops struct changes) ==="
