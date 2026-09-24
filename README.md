@@ -10,6 +10,7 @@
 | 1. Source selection | DONE | Linux 4.14 base (closest reachable to 3.10; 2016-2017 era) |
 | 2. Driver inventory | DONE | 793 MB Samsung downstream tree, ~47.5k files |
 | 3. Board bring-up port | NEXT | arch/arm/mach-exynos + mach-universal3475 + defconfig |
+| 7. Exynos3475 CCF clock port | IN PROGRESS | donor CCF driver + 4.14 compatibility overlay; compile-only |
 | 4. Boot test (serial/QEMU first) | PENDING | Stage-0: U-Boot/QEMU virt, Stage-1: hardware |
 | 5. Peripheral bring-up | PENDING | display, touch, camera, WiFi, TEE |
 | 6. Android 7.1 HAL validation | PENDING | vendor blobs, gatekeeper, camera HAL |

@@ -1,0 +1,143 @@
+name: Phase7 - Exynos3475 clock CCF port (compile verification)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: phase7-exynos3475-clock-port
+  cancel-in-progress: true
+
+jobs:
+  phase7:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Checkout experiment repository
+        uses: actions/checkout@v7.0.1
+
+      - name: Install build packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            bc bison flex build-essential ca-certificates ccache git \
+            libncurses-dev libssl-dev xz-utils
+
+      - name: Restore cached ARM32 toolchain
+        id: toolchain-cache
+        uses: actions/cache@v6.1.0
+        with:
+          path: .toolchain/arm-eabi-4.9
+          key: burstlam-arm-eabi-4.9-v1
+
+      - name: Fetch era-matched ARM32 toolchain
+        if: ${{ steps.toolchain-cache.outputs.cache-hit != 'true' }}
+        run: |
+          set -euo pipefail
+          TC="$GITHUB_WORKSPACE/.toolchain/arm-eabi-4.9"
+          mkdir -p "$(dirname "$TC")"
+          rm -rf "$TC"
+          git clone --quiet --depth 1 https://github.com/burstlam/arm-eabi-4.9.git "$TC"
+          "$TC/bin/arm-eabi-gcc" --version | head -1
+
+      - name: Fetch Linux 4.14 and FY donor provenance
+        run: |
+          set -euo pipefail
+          mkdir -p source
+          cd source
+          curl -fSL --retry 3 -o linux-4.14.tar.xz \
+            https://cdn.kernel.org/pub/linux/kernel/v4.x/linux-4.14.tar.xz
+          tar -xf linux-4.14.tar.xz
+          mv linux-4.14 linux
+          git clone --quiet --depth 1 --branch cm-14.1 \
+            https://github.com/Exynos3475/android_kernel_samsung_exynos3475.git donor
+          test -f donor/drivers/clk/samsung/clk-exynos3475.c
+          test -f donor/drivers/clk/samsung/composite.c
+          test -f donor/arch/arm/mach-exynos/include/mach/regs-clock-exynos3475.h
+          {
+            echo "=== donor provenance ==="
+            sha256sum donor/drivers/clk/samsung/clk-exynos3475.c
+            sha256sum donor/drivers/clk/samsung/composite.c
+            sha256sum donor/arch/arm/mach-exynos/include/mach/regs-clock-exynos3475.h
+          } | tee "$GITHUB_WORKSPACE/phase7-donor-provenance.txt"
+
+      - name: Apply Phase 7 Exynos3475 CCF port files
+        run: |
+          set -euo pipefail
+          SRC="$GITHUB_WORKSPACE/source/linux"
+          PORT="$GITHUB_WORKSPACE/.local-test/linux"
+          for f in \
+            drivers/clk/samsung/composite-exynos3475.c \
+            drivers/clk/samsung/composite-exynos3475.h \
+            drivers/clk/samsung/clk-exynos3475.c \
+            arch/arm/mach-exynos/include/mach/regs-clock-exynos3475.h \
+            include/dt-bindings/clock/exynos3475.h \
+            drivers/clk/samsung/Makefile \
+            arch/arm/mach-exynos/Kconfig; do
+            test -f "$PORT/$f"
+            mkdir -p "$SRC/$(dirname "$f")"
+            cp "$PORT/$f" "$SRC/$f"
+          done
+          # This is the idempotent GCC-10+ yylloc compatibility fix for the
+          # shipped DTC parser. The repository contains the already-fixed copy.
+          cp "$PORT/scripts/dtc/dtc-parser.tab.c_shipped" \
+            "$SRC/scripts/dtc/dtc-parser.tab.c_shipped"
+          {
+            echo "=== Phase 7 overlay ==="
+            sha256sum \
+              "$SRC/drivers/clk/samsung/composite-exynos3475.c" \
+              "$SRC/drivers/clk/samsung/composite-exynos3475.h" \
+              "$SRC/drivers/clk/samsung/clk-exynos3475.c" \
+              "$SRC/arch/arm/mach-exynos/include/mach/regs-clock-exynos3475.h" \
+              "$SRC/include/dt-bindings/clock/exynos3475.h"
+          } | tee "$GITHUB_WORKSPACE/phase7-overlay.txt"
+
+      - name: Configure Exynos3475 clock gate
+        working-directory: source/linux
+        run: |
+          set -euo pipefail
+          export ARCH=arm
+          export CROSS_COMPILE="$GITHUB_WORKSPACE/.toolchain/arm-eabi-4.9/bin/arm-eabi-"
+          export KBUILD_BUILD_USER=phase7
+          export KBUILD_BUILD_HOST=runner
+          make exynos_defconfig
+          scripts/config --enable CONFIG_SOC_EXYNOS3475
+          make olddefconfig
+          grep -E '^CONFIG_(SOC_EXYNOS3475|ARCH_EXYNOS3|ARCH_EXYNOS|COMMON_CLK_SAMSUNG)=' .config | tee "$GITHUB_WORKSPACE/phase7-config.txt"
+          test "$(grep -c '^CONFIG_SOC_EXYNOS3475=y$' .config)" -eq 1
+
+      - name: Compile Exynos3475 clock objects and kernel
+        working-directory: source/linux
+        run: |
+          set -euo pipefail
+          export ARCH=arm
+          export CROSS_COMPILE="$GITHUB_WORKSPACE/.toolchain/arm-eabi-4.9/bin/arm-eabi-"
+          export KBUILD_BUILD_USER=phase7
+          export KBUILD_BUILD_HOST=runner
+          make -j"$(nproc)" drivers/clk/samsung/composite-exynos3475.o \
+            drivers/clk/samsung/clk-exynos3475.o
+          test -s drivers/clk/samsung/composite-exynos3475.o
+          test -s drivers/clk/samsung/clk-exynos3475.o
+          make -j"$(nproc)" zImage dtbs | tee "$GITHUB_WORKSPACE/phase7-build.log"
+          test -s arch/arm/boot/zImage
+          file arch/arm/boot/zImage
+          cat include/config/kernel.release
+          echo PHASE7_CLOCK_PORT_COMPILE_PASS
+
+      - name: Upload Phase 7 evidence
+        if: always()
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: phase7-exynos3475-clock-port-evidence
+          path: |
+            ${{ github.workspace }}/phase7-donor-provenance.txt
+            ${{ github.workspace }}/phase7-overlay.txt
+            ${{ github.workspace }}/phase7-config.txt
+            ${{ github.workspace }}/phase7-build.log
+            source/linux/arch/arm/boot/zImage
+            source/linux/drivers/clk/samsung/composite-exynos3475.o
+            source/linux/drivers/clk/samsung/clk-exynos3475.o
+          if-no-files-found: warn
+          retention-days: 14

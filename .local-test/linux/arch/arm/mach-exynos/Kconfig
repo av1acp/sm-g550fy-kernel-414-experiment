@@ -80,6 +80,13 @@ config SOC_EXYNOS3250
 	default y
 	depends on ARCH_EXYNOS3
 
+config SOC_EXYNOS3475
+	bool "SAMSUNG EXYNOS3475"
+	depends on ARCH_EXYNOS3
+	select COMMON_CLK_SAMSUNG
+	help
+	  Samsung EXYNOS3475 (Cortex-A7) SoC clock controller.
+
 config CPU_EXYNOS4210
 	bool "SAMSUNG EXYNOS4210"
 	default y

@@ -1,36 +1,48 @@
-# Phase 7 — Exynos3475 Clock Driver Port (Research + Implementation Plan)
+# Phase 7 — Exynos3475 Clock Driver Port (Compile Gate)
 
 ## Status
-**Foundation complete; implementation is a multi-day kernel engineering task.**
+**Phase 7a/7b implementation is in the experiment repository. The two new
+clock objects compile locally; GitHub Actions full-kernel verification is the
+next gate. This is not a hardware-boot claim.**
 
-## Verified source facts (2026-09-24)
-- **4.14 Exynos4 CCF registration point**:
-  `drivers/clk/samsung/clk-exynos4.c` → `ext_clk_match[]` at line 1275.
-- **Exynos3475 clock implementation (3.10 donor)**:
-  `arch/arm/mach-exynos/exynos-clk.c` (Samsung custom clock framework,
-  NOT CCF) + `regs-clock-exynos3475.h`.
-- **4.14 pinctrl framework** already exists at
-  `drivers/pinctrl/samsung/pinctrl-exynos*.c` (verified compile).
-- **Reference implementation**: upstream Linux Exynos3250 patch (785-line
-  `clk-exynos3250.c` + DTS + bindings) is the same-generation
-  architecture approach for a newer Exynos SoC.
+## Corrected source facts (verified 2026-09-24)
+- The donor Exynos3475 CCF implementation is actually
+  `drivers/clk/samsung/clk-exynos3475.c`, not
+  `arch/arm/mach-exynos/exynos-clk.c`.
+- Its dependency is the donor vendor composite implementation
+  `drivers/clk/samsung/composite.c` plus `composite.h`.
+- The 4.14 tree already has a common Samsung CCF layer in
+  `drivers/clk/samsung/clk.c`, `clk-pll.c`, and `clk.h`; the donor composite
+  layer was therefore namespaced and adapted to the 4.14 public clock API.
+- Linux 4.14 does not provide the donor's virtual CMU map. The compile gate
+  uses an explicitly marked placeholder virtual window; physical CMU mapping
+  belongs to the later machine-init/early-boot gate.
 
-## Required implementation
-1. Create `drivers/clk/samsung/clk-exynos3475.c` from donor clock tables,
-   converted to Common Clock Framework (4.14 APIs).
-2. Add `include/dt-bindings/clock/exynos3475.h` and register the SoC in
-   `clk-exynos4.c` `ext_clk_match[]`.
-3. Exynos3250 upstream patch = exact same pattern/roadmap.
-4. Machine init: port `mach-universal3475.c`, `pm-exynos3475.c`,
-   `pm_domains-exynos3475.c`, `pmu-exynos3475.c` from donor to 4.14.
-5. DTS: convert `exynos3475-universal3475.dts` to 4.14 phandle syntax.
+## Files added/changed
+- `drivers/clk/samsung/clk-exynos3475.c`
+- `drivers/clk/samsung/composite-exynos3475.c`
+- `drivers/clk/samsung/composite-exynos3475.h`
+- `arch/arm/mach-exynos/include/mach/regs-clock-exynos3475.h`
+- `include/dt-bindings/clock/exynos3475.h`
+- `drivers/clk/samsung/Makefile`
+- `arch/arm/mach-exynos/Kconfig`
+- `scripts/dtc/dtc-parser.tab.c_shipped` (known GCC-10+ yylloc fix)
 
-## Gate
-- Compile-only for every stage.
-- No device flash until a real device-tree + early console proof exists.
-- Working 3.10.9 + KSU is isolated in
-  `~/Downloads/j2/backups_3.10.9_KSU_WORKING/` and will not be modified.
+## Local verification
+Both objects compile with Linux 4.14 headers:
 
-## Honest estimate
-1-2 weeks full-time for a real early-boot port; 2-3 months for full
-Android userspace/peripherals including MobiCore/TEE, display, camera.
+```
+drivers/clk/samsung/composite-exynos3475.o
+ drivers/clk/samsung/clk-exynos3475.o
+```
+
+The workflow `.github/workflows/phase7-exynos3475-clock-port.yml` fetches a
+fresh kernel.org 4.14 tree, the pinned FY donor tree, the era-matched ARM32
+toolchain, compiles both objects, then builds `zImage` and `dtbs`.
+
+## Remaining hardware gate
+- Replace the placeholder virtual CMU map with real early machine mapping.
+- Port the Exynos3475 machine/pinctrl/DT and prove an early serial console.
+- Do not flash or claim phone boot from this compile gate.
+- Working 3.10.9 + KernelSU remains isolated in
+  `~/Downloads/j2/backups_3.10.9_KSU_WORKING/`.
