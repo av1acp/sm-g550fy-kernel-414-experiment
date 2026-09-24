@@ -53,10 +53,20 @@ jobs:
           # gcc >= 10 defaults to -fno-common; old trees' shipped dtc
           # parser+lexer both define yylloc -> link error. Make the parser
           # copy extern (same fix as our 3.10 build script).
-          if grep -q '^YYLTYPE yylloc;$' scripts/dtc/dtc-parser.tab.c_shipped; then
+          # 4.14 parser defines yylloc as "YYLTYPE yylloc" (no semicolon,
+          # followed by a brace init) around line 1205. The lexer also
+          # defines it -> duplicate under -fno-common. Make the parser copy
+          # extern, keeping its initializer semantics.
+          if grep -q '^YYLTYPE yylloc$' scripts/dtc/dtc-parser.tab.c_shipped; then
+            sed -i '0,/^YYLTYPE yylloc$/s//extern YYLTYPE yylloc/' \
+              scripts/dtc/dtc-parser.tab.c_shipped
+            echo "applied dtc yylloc extern fix (4.14 parser format)"
+          elif grep -q '^YYLTYPE yylloc;$' scripts/dtc/dtc-parser.tab.c_shipped; then
             sed -i 's/^YYLTYPE yylloc;$/extern YYLTYPE yylloc;/' \
               scripts/dtc/dtc-parser.tab.c_shipped
-            echo "applied dtc yylloc extern fix"
+            echo "applied dtc yylloc extern fix (semicolon format)"
+          else
+            echo "WARNING: no parser yylloc definition matched — inspect manually"
           fi
           # gcc >= 10 defaults to -fno-common; old dtc ships both a
           # parser and lexer copy of YYLTYPE yylloc -> duplicate symbol at
