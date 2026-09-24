@@ -53,9 +53,9 @@ jobs:
           # an explicit CPU, so ARMv7-only instructions (cpsid i/cpsie i,
           # dsb, ishst) are rejected. multi_v7_defconfig's flags need the
           # processor override on this old (4.14) tree.
-          export KBUILD_CFLAGS="${KBUILD_CFLAGS:-} -mcpu=cortex-a7"
-          export KBUILD_CPPFLAGS="${KBUILD_CPPFLAGS:-} -mcpu=cortex-a7"
-          export KBUILD_ASFLAGS="${KBUILD_ASFLAGS:-} -mcpu=cortex-a7"
+          # KBUILD_EXTRA_CFLAGS is appended AFTER the arch-derived flags,
+          # so -mcpu=cortex-a7 wins over any earlier default -march.
+          export KBUILD_EXTRA_CFLAGS="${KBUILD_EXTRA_CFLAGS:-} -mcpu=cortex-a7"
           export KBUILD_BUILD_USER=phase0
           export KBUILD_BUILD_HOST=runner
           # gcc >= 10 defaults to -fno-common; old trees' shipped dtc
