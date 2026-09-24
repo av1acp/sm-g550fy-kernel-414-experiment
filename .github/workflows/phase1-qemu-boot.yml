@@ -18,8 +18,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            qemu-system-arm qemu-utils busybox-static cpio \
-            gzip xz-utils ca-certificates
+            qemu-system-arm qemu-utils cpio \
+            gzip xz-utils ca-certificates gcc-arm-linux-gnueabi
 
       - name: Restore cached ARM32 toolchain
         id: toolchain-cache
@@ -81,30 +81,29 @@ jobs:
       - name: Build static ARM busybox and initramfs
         run: |
           set -euo pipefail
-          TC="$GITHUB_WORKSPACE/.toolchain/arm-eabi-4.9"
 
-          # busybox.net does not host prebuilt armv7l; build static busybox
-          # from source with the same cross toolchain (gcc 4.9 is proven
-          # for this old kernel tree).
+          # busybox.net does not host prebuilt armv7l. Build it from
+          # source with Ubuntu's complete ARM sysroot. The kernel itself
+          # still uses the cached era-matched toolchain above; busybox is
+          # userspace and is not subject to the 4.14 kernel ISA issue.
           curl -fSL --retry 3 -o busybox.tar.bz2 \
             https://busybox.net/downloads/busybox-1.36.1.tar.bz2
           tar -xjf busybox.tar.bz2
           cd busybox-1.36.1
           make defconfig
-          # Busybox uses its own .config (not kernel's scripts/config).
-          # Toggle static build + applet preference with sed.
+          # Busybox has its own .config; kernel scripts/config is not used here.
           sed -i 's/^# CONFIG_STATIC is not set/CONFIG_STATIC=y/' .config
           sed -i 's/^# CONFIG_FEATURE_PREFER_APPLETS is not set/CONFIG_FEATURE_PREFER_APPLETS=y/' .config
           sed -i 's/^# CONFIG_INSTALL_NO_USR is not set/CONFIG_INSTALL_NO_USR=y/' .config
-          # Verify static is actually set
           grep -q '^CONFIG_STATIC=y' .config || { echo "FATAL: CONFIG_STATIC not enabled"; exit 1; }
-          make oldconfig </dev/null >/dev/null
-          make -j"$(nproc)" CROSS_COMPILE="$TC/bin/arm-eabi-" ARCH=arm
+          yes '' | make oldconfig >/dev/null
+          make -j"$(nproc)" CROSS_COMPILE=arm-linux-gnueabi- ARCH=arm
           file busybox
-          # verify it is static ARM
-          "$TC/bin/arm-eabi-readelf" -h busybox | grep -E "Machine|Class" || true
-          "$TC/bin/arm-eabi-readelf" -l busybox | grep -i interp && \
-            { echo "FAIL: busybox is dynamically linked"; exit 1; } || true
+          arm-linux-gnueabi-readelf -h busybox | grep -E 'Class|Machine'
+          if arm-linux-gnueabi-readelf -l busybox | grep -q INTERP; then
+            echo "FATAL: busybox is dynamically linked"; exit 1
+          fi
+          echo "STATIC ARM BUSYBOX OK"
 
           ROOT="$RUNNER_TEMP/initramfs"
           mkdir -p "$ROOT/bin" "$ROOT/dev" "$ROOT/proc" "$ROOT/sys" "$ROOT/tmp"
