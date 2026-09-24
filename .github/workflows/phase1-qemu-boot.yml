@@ -78,18 +78,37 @@ jobs:
           cat include/config/kernel.release
           echo "VIRT KERNEL BUILD OK"
 
-      - name: Build static ARM busybox initramfs
+      - name: Build static ARM busybox and initramfs
         run: |
           set -euo pipefail
+          TC="$GITHUB_WORKSPACE/.toolchain/arm-eabi-4.9"
+
+          # busybox.net does not host prebuilt armv7l; build static busybox
+          # from source with the same cross toolchain (gcc 4.9 is proven
+          # for this old kernel tree).
+          curl -fSL --retry 3 -o busybox.tar.bz2 \
+            https://busybox.net/downloads/busybox-1.36.1.tar.bz2
+          tar -xjf busybox.tar.bz2
+          cd busybox-1.36.1
+          make defconfig
+          scripts/config --enable STATIC
+          scripts/config --disable FEATURE_SH_STANDALONE_SHELL
+          scripts/config --enable FEATURE_PREFER_APPLETS
+          scripts/config --enable INSTALL_NO_USR
+          make oldconfig >/dev/null
+          make -j"$(nproc)" CROSS_COMPILE="$TC/bin/arm-eabi-" \
+            ARCH=arm oldconfig >/dev/null
+          make -j"$(nproc)" CROSS_COMPILE="$TC/bin/arm-eabi-" ARCH=arm
+          file busybox
+          # verify it is static ARM
+          "$TC/bin/arm-eabi-readelf" -h busybox | grep -E "Machine|Class" || true
+          "$TC/bin/arm-eabi-readelf" -l busybox | grep -i interp && \
+            { echo "FAIL: busybox is dynamically linked"; exit 1; } || true
+
           ROOT="$RUNNER_TEMP/initramfs"
           mkdir -p "$ROOT/bin" "$ROOT/dev" "$ROOT/proc" "$ROOT/sys" "$ROOT/tmp"
-          # busybox-static from Ubuntu is x86 only; use a prebuilt ARM one.
-          curl -fSL --retry 3 -o "$RUNNER_TEMP/busybox-arm" \
-            https://busybox.net/downloads/binaries/1.35.0-armv7l/busybox
-          chmod +x "$RUNNER_TEMP/busybox-arm"
-          "$RUNNER_TEMP/busybox-arm" | head -2
-          cp "$RUNNER_TEMP/busybox-arm" "$ROOT/bin/busybox"
-          # init script: mount pseudo-fs, print proof, power off
+          cp busybox "$ROOT/bin/busybox"
+          chmod +x "$ROOT/bin/busybox"
           cat > "$ROOT/init" <<'EOF'
           #!/bin/sh
           /bin/busybox --install -s /bin
@@ -97,13 +116,14 @@ jobs:
           mount -t sysfs sys /sys
           mount -t devtmpfs dev /dev
           echo "===PHASE1_BOOT_PROOF_START==="
-          uname -a
+          /bin/busybox uname -a
           echo "PHASE1: userspace reached, PID $$"
+          /bin/busybox id
           echo "===PHASE1_BOOT_PROOF_END==="
+          /bin/busybox sleep 1
           /bin/busybox poweroff -f
           EOF
           chmod +x "$ROOT/init"
-          # Build static cpio
           (cd "$ROOT" && find . -print0 | cpio --null -o -H newc --quiet) \
             | gzip -1 > "$RUNNER_TEMP/initramfs.cpio.gz"
           ls -lh "$RUNNER_TEMP/initramfs.cpio.gz"
